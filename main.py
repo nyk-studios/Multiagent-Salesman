@@ -1,4 +1,4 @@
-# app_min3.py — Sparky Stage-1 with history + STATE handoff + clean exit
+# app_min3.py – Sparky Stage-1 with history + STATE handoff + clean exit
 from __future__ import annotations
 
 import os, json, re, yaml
@@ -15,21 +15,21 @@ try:
 except Exception:
     ChatOpenAI = None
 
-DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "config_min3.yaml")
+DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "new_config.yaml")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_OPENAI = bool(OPENAI_API_KEY and ChatOpenAI)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
 
 
-
-
 class _SafeDict(dict):
     def __missing__(self, key):  # leave {unknown} as-is
         return "{" + key + "}"
 
+
 def render_tmpl(tmpl: str, **ctx) -> str:
     return (tmpl or "").format_map(_SafeDict(**ctx))
+
 
 def load_yaml_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
     p = Path(path)
@@ -53,15 +53,33 @@ def load_yaml_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Dict[str, 
                 raise ValueError(f"Agent '{key}' missing {req}")
     return agents, supervisor_prompts
 
+
 @st.cache_resource(show_spinner=False)
 def load_configs_cached():
     return load_yaml_config()
+
 
 try:
     AGENT_CONFIGS, SUPERVISOR_PROMPTS = load_configs_cached()
 except Exception as e:
     st.error(f"Failed to load YAML config: {e}")
     st.stop()
+
+
+# ---------------- Reducer for stage_meta ----------------
+def merge_stage_meta(left: Optional[Dict], right: Optional[Dict]) -> Dict:
+    """Deep merge stage_meta dictionaries"""
+    import copy
+    result = copy.deepcopy(left) if left else {}
+    if right:
+        for key, value in right.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # Deep merge nested dicts
+                result[key] = {**result[key], **value}
+            else:
+                result[key] = value
+    return result
+
 
 # ---------------- Shared State ----------------
 class AgentState(TypedDict, total=False):
@@ -72,9 +90,9 @@ class AgentState(TypedDict, total=False):
     agent_index: int
     exchanges_with_current: int
     last_agent: str
-    stage_meta: Dict[str, Dict[str, Any]]
-    # NEW: store latest answer options for UI buttons
+    stage_meta: Annotated[Dict[str, Dict[str, Any]], merge_stage_meta]  #
     last_options: List[str]
+
 
 # ---------------- Agent ----------------
 class Agent:
@@ -86,11 +104,11 @@ class Agent:
 
     def _mock_response(self, user_text: str, last_agent: str = "") -> str:
         return (
-            "Hey there! I’m Sparky — quick check-in before we explore together.\n"
+            "Hey there! I'm Sparky – quick check-in before we explore together.\n"
             "What feels most true right now?\n"
             "A) I want to restart my creative spark\n"
-            "B) I’m curious but hesitant\n"
-            "C) I’m overwhelmed and need calm\n"
+            "B) I'm curious but hesitant\n"
+            "C) I'm overwhelmed and need calm\n"
             "D) Not sure yet\n\n"
             "[INTENT_TYPE: Exploratory]\n"
             "[CONFIRM_INTENT: partial]\n"
@@ -121,9 +139,10 @@ class Agent:
         sys_content = render_tmpl(self.system, **ctx)
         human_content = render_tmpl(self.human_template, **ctx)
 
-        # ✅ Include prior conversation so the LLM sees last Q&A
+        #  Include prior conversation so the LLM sees last Q&A
         recent_msgs = list(state.get("messages", []))[-8:]
-        msgs: List[BaseMessage] = [SystemMessage(content=sys_content)] + recent_msgs + [HumanMessage(content=human_content)]
+        msgs: List[BaseMessage] = [SystemMessage(content=sys_content)] + recent_msgs + [
+            HumanMessage(content=human_content)]
 
         try:
             llm = ChatOpenAI(model=OPENAI_MODEL, temperature=OPENAI_TEMPERATURE)
@@ -139,6 +158,7 @@ class Agent:
         user_text = state.get("user_input", "")
 
         reply = self._generate_response(history, user_text, state)
+        print("\n\n====== RAW LLM REPLY ======\n", reply, "\n===========================\n\n")
 
         # -------- Parse Tags --------
         def _tag(pattern, default=None, cast=lambda x: x):
@@ -146,7 +166,8 @@ class Agent:
             return cast(m.group(1)) if m else default
 
         intent_status = _tag(r"\[CONFIRM_INTENT:\s*(clear|partial|unclear)\s*\]", "partial")
-        intent_type   = _tag(r"\[INTENT_TYPE:\s*(Exploratory|Aspirational|Therapeutic|Achievement|Connection|unknown)\s*\]", "unknown")
+        intent_type = _tag(
+            r"\[INTENT_TYPE:\s*(Exploratory|Aspirational|Therapeutic|Achievement|Connection|unknown)\s*\]", "unknown")
         emotional_tone = _tag(r"\[EMO_TONE:\s*(positive|neutral|tense|resistant)\s*\]", "neutral")
         behavioral_signal = _tag(r"\[BEHAVIORAL_SIGNAL:\s*(explorer|planner|reflector|hands_on)\s*\]", "explorer")
 
@@ -163,31 +184,43 @@ class Agent:
         clean_for_user = re.sub(r"\n?STATE\s*=\s*\{.*\}\s*$", "", reply, flags=re.S).strip()
         clean_for_user = re.sub(r"\n?\[[A-Za-z_]+:\s*[^\]]+\]\s*", "", clean_for_user).strip()
 
-        # Save meta for supervisor + next prompt
-        state.setdefault("stage_meta", {})
-        state["stage_meta"].setdefault(self.info_type, {})
-        me = state["stage_meta"][self.info_type]
-        me.update({
-            "intent_status": intent_status,         # clear | partial | unclear
-            "intent_type": intent_type,             # Exploratory | Aspirational | ...
-            "emotional_tone": emotional_tone,       # positive | neutral | tense | resistant
-            "behavioral_signal": behavioral_signal, # explorer | planner | reflector | hands_on
-            "last_state_json": state_payload,       # tiny theme/level/turn memory
-        })
+        #  Create a NEW stage_meta dictionary with deep copy
+        import copy
+        new_stage_meta = copy.deepcopy(state.get("stage_meta", {}))
+
+        #  Replace entire sub-dict (not update)
+        new_stage_meta[self.info_type] = {
+            "intent_status": intent_status,  # clear | partial | unclear
+            "intent_type": intent_type,  # Exploratory | Aspirational | ...
+            "emotional_tone": emotional_tone,  # positive | neutral | tense | resistant
+            "behavioral_signal": behavioral_signal,  # explorer | planner | reflector | hands_on
+            "last_state_json": state_payload,  # tiny theme/level/turn memory
+        }
+
+        #  DEBUG: Print parsed values
+        print(f"DEBUG - Parsed intent_status: {intent_status}")
+        print(f"DEBUG - Parsed intent_type: {intent_type}")
+        print(f"DEBUG - Parsed emotional_tone: {emotional_tone}")
+        print(f"DEBUG - Parsed behavioral_signal: {behavioral_signal}")
+        print(f"DEBUG - New stage_meta: {new_stage_meta}")
 
         # collected info for sidebar
         merged_collected = dict(state.get("collected_info", {}))
         if user_text:
             merged_collected.setdefault(self.info_type, []).append(user_text)
 
+        #  Return the NEW dictionary
         updates: AgentState = {
             "messages": [AIMessage(content=clean_for_user)],
             "collected_info": merged_collected,
-            "stage_meta": state.get("stage_meta", {}),
+            "stage_meta": new_stage_meta,
             "exchanges_with_current": state.get("exchanges_with_current", 0) + 1,
             "last_agent": self.info_type,
         }
+
+        print(f"DEBUG - Returning stage_meta: {updates['stage_meta']}")
         return updates
+
 
 # ---------------- Supervisor ----------------
 class Supervisor:
@@ -206,16 +239,22 @@ class Supervisor:
         intent_status = (meta_conn.get("intent_status") or "").lower()
         emotional_tone = (meta_conn.get("emotional_tone") or "").lower()
 
-        # ✅ Exit when confirmed OR after 3 questions as a safety stop
+        print(
+            f"DEBUG SUPERVISOR - conn_turns: {conn_turns}, intent_status: {intent_status}, emotional_tone: {emotional_tone}")
+
+        #  Exit when confirmed OR after 3 questions as a safety stop
         ready = (intent_status == "clear") and (emotional_tone != "resistant")
         if ready or conn_turns >= 3:
+            print(f"DEBUG SUPERVISOR - FINISHING (ready={ready}, conn_turns={conn_turns})")
             return {"next_agent": "FINISH", "exchanges_with_current": 0}
 
         # default: keep in connection stage
         if "connection" in self.agent_keys:
+            print(f"DEBUG SUPERVISOR - Continuing with connection agent")
             return {"agent_index": self.agent_keys.index("connection"),
                     "next_agent": "connection", "exchanges_with_current": 0}
         return {"next_agent": "FINISH", "exchanges_with_current": 0}
+
 
 # ---------------- Graph ----------------
 def create_graph(agent_configs: Dict[str, Dict[str, str]]):
@@ -247,6 +286,7 @@ def create_graph(agent_configs: Dict[str, Dict[str, str]]):
     workflow.set_entry_point("supervisor")
     return workflow.compile()
 
+
 # ---------------- Helper: extract options from assistant text ----------------
 def extract_options(text: str) -> Tuple[str, List[str]]:
     """
@@ -268,12 +308,15 @@ def extract_options(text: str) -> Tuple[str, List[str]]:
     clean_text = "\n".join(kept_lines).strip()
     return clean_text, options
 
+
 # ---------------- Turn execution ----------------
 def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, AgentState]:
     if (state.get("next_agent") or "").upper() == "FINISH":
         # No more questions: clear options
         state["last_options"] = []
         return "We've collected everything we need. Thanks!", state
+
+    print(f"DEBUG - Input state stage_meta: {state.get('stage_meta', {})}")
 
     before = len(state.get("messages", []))
     state = {
@@ -282,6 +325,9 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
         "user_input": msg
     }
     new_state = graph.invoke(state)
+
+    print(f"DEBUG - Output state stage_meta: {new_state.get('stage_meta', {})}")
+
     after = new_state.get("messages", [])
     ai_msgs = [m for m in after[before:] if isinstance(m, AIMessage)]
     raw_ai_text = "\n\n".join([m.content for m in ai_msgs if m.content])
@@ -291,6 +337,7 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
     new_state["last_options"] = options
 
     return clean_text, new_state
+
 
 # ---------------- Streamlit UI ----------------
 def _init_session():
@@ -302,14 +349,15 @@ def _init_session():
             collected_info={k: [] for k in {cfg["info_type"] for cfg in AGENT_CONFIGS.values()}},
             next_agent="", agent_index=0, exchanges_with_current=0, last_agent="",
             stage_meta={},
-            last_options=[]  # NEW
+            last_options=[]
         )
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
+
 def main():
-    st.set_page_config(page_title="Sparky — Stage 1 (Connection & Curiosity)", layout="wide")
-    st.title("🤖 Sparky — Stage 1 (Connection & Curiosity)")
+    st.set_page_config(page_title="Sparky – Stage 1 (Connection & Curiosity)", layout="wide")
+    st.title("🤖 Sparky – Stage 1 (Connection & Curiosity)")
     _init_session()
     st.info("OpenAI active" if USE_OPENAI else "Mock mode", icon="✅" if USE_OPENAI else "⚠️")
 
@@ -326,7 +374,7 @@ def main():
         for k, v in st.session_state.state.get("collected_info", {}).items():
             st.markdown(f"**{k}** ({len(v)})")
             for i, it in enumerate(v[-5:]):
-                st.write(f"- {i+1}. {it}")
+                st.write(f"- {i + 1}. {it}")
 
         st.markdown("---")
         st.header("Conversation Insights")
@@ -343,7 +391,8 @@ def main():
             for k in list(st.session_state.keys()):
                 if k not in keep:
                     del st.session_state[k]
-            _init_session(); st.rerun()
+            _init_session();
+            st.rerun()
 
     # Show chat history
     for t in st.session_state.chat_history:
@@ -377,6 +426,7 @@ def main():
         with st.chat_message("assistant"):
             st.markdown(ai_text)
         st.rerun()
+
 
 if __name__ == "__main__":
     main()
