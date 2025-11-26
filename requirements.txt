@@ -1,5 +1,11 @@
-streamlit
-langgraph
-langchain-core
-langchain-openai
-PyYAML
+streamlit>=1.36,<2
+
+PyYAML>=6.0
+
+langgraph>=0.2,<1.0
+langchain-core>=0.2,<1.0
+langchain-openai>=0.1.7,<1.0
+
+# safety pins (LangChain still relies on pydantic v1 compat in places)
+pydantic>=1.10,<3
+openai>=1.30,<3
