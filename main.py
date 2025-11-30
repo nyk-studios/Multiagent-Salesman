@@ -1,26 +1,28 @@
 # app_enhanced_refactored.py – Sparky with inheritance-based agent architecture
 from __future__ import annotations
+from collections import Counter
 
 import os, json, re, yaml
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict, Any, Tuple, Sequence, Annotated
+from typing import Dict, List, Optional, TypedDict, Any, Tuple, Sequence, Annotated,Literal
 from abc import ABC, abstractmethod
 
 import streamlit as st
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+import random
 
 try:
     from langchain_openai import ChatOpenAI
 except Exception:
     ChatOpenAI = None
 
-DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "new_config.yaml")
+DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "test_try.yaml")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_OPENAI = bool(OPENAI_API_KEY and ChatOpenAI)
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.8"))
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
 
 # Load agent + supervisor configuration from YAML
 CONFIG_PATH = Path(DEFAULT_CONFIG_PATH)
@@ -42,37 +44,165 @@ from langchain_core.pydantic_v1 import BaseModel as PydanticV1BaseModel, Field a
 # AD DATA INTEGRATION
 # ============================================================================
 
+
+
+AdTheme = Literal["self_expression", "wellness", "skill_growth", "ambition", "belonging"]
+
 class AdData(TypedDict):
-    """External ad data that influences the conversation"""
-    ad_id: str
-    campaign_name: str
-    ad_creative_theme: str  # e.g., "creativity", "wellness", "side_hustle"
-    target_audience: str  # e.g., "busy_professionals", "creative_explorers"
-    landing_page_url: str
-    utm_source: str
-    utm_campaign: str
-    timestamp: str
+    ad_name: str
+    ad_description: str
+    ad_theme: AdTheme
 
+MOCK_ADS: Dict[str, AdData] = {
+    "extreme_talent": {
+        "ad_name": "Talent Showcase",
+        "ad_description": (
+            "This ad uses impressive, high-skill, visually striking craft shots to trigger awe "
+            "and a desire for mastery. It attracts Quiet Achievers and creative dabblers who want "
+            "to feel more capable, skilled, and creatively confident. The message is about "
+            "transforming from 'not good at this' into someone who produces beautiful, impressive "
+            "work. The ad sells variety and mastery potential across many skills, creating a sense "
+            "of progress, challenge, and personal capability — ideal for an achievement-driven funnel."
+        ),
+        "ad_theme": "skill_growth",
+    },
+    "adhd_advantage": {
+        "ad_name": "Neurodivergent Empowerment",
+        "ad_description": (
+            "This ad validates ADHD struggles with humor, relatability, and rapid-cut captions, "
+            "promising a shift from shame and inconsistency to embracing ADHD as a creative advantage. "
+            "It draws neurodivergent learners seeking self-acceptance and accessible learning structures. "
+            "The emotional driver is relief + empowerment, not productivity, and it reassures them that "
+            "Skill-A-Week works with their brain through flexibility, beginner-friendliness, and small wins."
+        ),
+        "ad_theme": "wellness",
+    },
+    "cookies_asmr": {
+        "ad_name": "Sensory Soother",
+        "ad_description": (
+            "This ad taps into sensory satisfaction and calming ASMR visuals, appealing to viewers seeking "
+            "emotional relief, comfort, and a peaceful creative ritual. It attracts overwhelmed adults and "
+            "sensory-sensitive people who want low-pressure, feel-good activities that help them unwind. "
+            "The promise isn’t mastery — it’s gentle creativity and emotional soothing, framed as self-care."
+        ),
+        "ad_theme": "wellness",
+    },
+    "purpose_tiktok": {
+        "ad_name": "Creative Purpose",
+        "ad_description": (
+            "A reflective, emotionally resonant ad that speaks to people feeling directionless, uninspired, "
+            "or disconnected from themselves. It offers creativity as a path to meaning, identity renewal, "
+            "and inner clarity. It attracts seekers craving depth, intention, and personal rebirth, and the "
+            "journey is about rediscovery rather than rushing toward skills or outcomes."
+        ),
+        "ad_theme": "self_expression",
+    },
+    "narrator_and_lily": {
+        "ad_name": "Heartfelt Connection",
+        "ad_description": (
+            "A warm, family-oriented storytelling ad centered on connection, presence, and shared creative "
+            "moments. It appeals to parents, sentimental adults, and nostalgic creatives who value bonding "
+            "and meaningful experiences. Creativity is framed as a way to nurture relationships and build memories."
+        ),
+        "ad_theme": "belonging",
+    },
+    "money_making": {
+        "ad_name": "Creative Income Builder",
+        "ad_description": (
+            "This ad targets financially motivated viewers seeking side income, financial relief, or "
+            "entrepreneurial creative opportunities. It sells the transformation from feeling financially "
+            "stuck to earning through creative output. The emotional driver is empowerment via financial "
+            "autonomy, with emphasis on ROI, sellable skills, and practical steps to turn skills into income."
+        ),
+        "ad_theme": "ambition",
+    },
+}
+# ---------------------------------------------------------------------------
+# Ensure connection_tone block exists with default emo fields
+# ---------------------------------------------------------------------------
+def ensure_tone_block(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Guarantee that stage_meta.connection_tone exists with default emo fields."""
+    stage_meta = dict(state.get("stage_meta", {}) or {})
 
-def get_mock_ad_data() -> AdData:
-    """Mock ad data - replace this with actual external data source"""
+    tone_block = dict(stage_meta.get("connection_tone", {}) or {})
+    tone_meta = dict(tone_block.get("metadata", {}) or {})
+    tone_state = dict(tone_block.get("state", {}) or {})
+
+    if "emo_tone_type" not in tone_meta:
+        tone_meta["emo_tone_type"] = ""          # not decided yet
+    if "confirm_tone" not in tone_meta:
+        tone_meta["confirm_tone"] = "unclear"    # tone not confirmed yet
+    if "emo_tone" not in tone_meta:
+        tone_meta["emo_tone"] = "unclear"        # classification not set yet
+    if "behavioral_signal" not in tone_meta:
+        tone_meta["behavioral_signal"] = "mixed" # safe neutral default
+
+    # These two will get overwritten by the tone agent when it copies intent,
+    # but we initialize them so the structure is always present.
+    tone_meta.setdefault("intent_type", "")
+    tone_meta.setdefault("confirm_intent", "unclear")
+
+    # --- State defaults ---
+    tone_state.setdefault("last_theme", "")
+    tone_state.setdefault("last_level", "")
+
+    # Add new emotional tone tracking fields <-- ADD THESE LINES
+    tone_state.setdefault("emo_tone_1", "")
+    tone_state.setdefault("emo_tone_2", "")
+    tone_state.setdefault("emo_tone_3", "")
+    # turn = 0 means: tone agent has not asked any questions yet
+    if "turn" not in tone_state:
+        tone_state["turn"] = 1
+
+    tone_block["metadata"] = tone_meta
+    tone_block["state"] = tone_state
+    stage_meta["connection_tone"] = tone_block
+
     return {
-        "ad_id": "AD_12345",
-        "campaign_name": "Creative Spark 2024",
-        "ad_creative_theme": "creativity",
-        "target_audience": "creative_explorers",
-        "landing_page_url": "https://nowyouknow.com/spark",
-        "utm_source": "facebook",
-        "utm_campaign": "creative_spark_nov",
-        "timestamp": "2024-11-18T10:30:00Z",
+        **state,
+        "stage_meta": stage_meta,
     }
 
+
+def get_mock_ad_data(ad_id: Optional[str] = None) -> AdData:
+    """
+    Mock ad data - replace this with actual external data source.
+
+    You can optionally pass ad_id to choose a specific mock ad:
+    - "extreme_talent"
+    - "adhd_advantage"
+    - "cookies_asmr"
+    - "purpose_tiktok"
+    - "narrator_and_lily"
+    - "money_making"
+    """
+
+    # 1) If explicit ad_id was provided and exists, use it
+    if ad_id and ad_id in MOCK_ADS:
+        return MOCK_ADS[ad_id]
+
+    # 2) Or use an env var (handy for testing without code changes)
+    env_ad_id = os.getenv("MOCK_AD_ID")
+    if env_ad_id and env_ad_id in MOCK_ADS:
+        return MOCK_ADS[env_ad_id]
+
+    # 3) Fallback: default scenario
+    mock_ids = [
+        "extreme_talent",
+        "adhd_advantage",
+        "cookies_asmr",
+        "purpose_tiktok",
+        "narrator_and_lily",
+        "money_making",
+    ]
+    chosen_id = random.choice(mock_ids)
+    return MOCK_ADS[chosen_id]
 
 def get_ad_data_from_external_source(ad_id: Optional[str] = None) -> AdData:
     """Fetch ad data from external source (API, database, etc.).
     For now returns mock data, but structured to be easily replaced."""
     # TODO: Replace with actual external data fetching
-    return get_mock_ad_data()
+    return get_mock_ad_data(ad_id=ad_id)
 
 
 # ============================================================================
@@ -82,18 +212,38 @@ def get_ad_data_from_external_source(ad_id: Optional[str] = None) -> AdData:
 class AgentResponse(PydanticV1BaseModel):
     """Generic structured response used by ALL agents.
 
+    - affirmation: warm reflection/validation (for connection_intent agent).
     - question_text: conversational question or prompt.
     - options: list of answer choices.
+    - intent_mapping: intent categories for each option (for connection_intent agent).
     - metadata: agent-specific output (intent, motivation_type, barriers, persona, etc.).
     - state: agent-specific state (turn counts, levels, flags, progress).
     """
 
+    affirmation: str = PydanticV1Field(
+        default="",
+        description="Warm reflection/validation (used by connection_intent agent)"
+    )
+
     question_text: str = PydanticV1Field(
+        default="",
         description="The conversational question or prompt to show the user"
     )
 
     options: List[str] = PydanticV1Field(
+        default_factory=list,
         description="Answer options (any number, typically 4)"
+    )
+
+    intent_mapping: List[str] = PydanticV1Field(
+        ...,  # Required field - NO default!
+        description=(
+            "Exactly 4 intent categories matching the 4 options. "
+            "Each value must be one of: 'self_expression', 'wellness', 'skill_growth', 'ambition', 'belonging', 'unsure'. "
+            "Example: ['belonging', 'skill_growth', 'wellness', 'unsure']"
+        ),
+        min_items=4,
+        max_items=4
     )
 
     metadata: Dict[str, Any] = PydanticV1Field(
@@ -109,6 +259,422 @@ class AgentResponse(PydanticV1BaseModel):
     class Config:
         extra = "forbid"
 
+
+# Strict response model specifically for connection_intent agent
+class ConnectionIntentResponse(PydanticV1BaseModel):
+    """Strict response format for connection_intent agent only."""
+
+    affirmation: str = PydanticV1Field(
+        ...,  # Required field (no default)
+        description="Warm reflection/validation sentence (1-2 sentences)",
+        min_length=10
+    )
+
+    question_text: str = PydanticV1Field(
+        ...,  # Required field
+        description="First-person question to ask the user",
+        min_length=10
+    )
+
+    options: List[str] = PydanticV1Field(
+        ...,  # Required field
+        description="Exactly 4 answer options",
+        min_items=4,
+        max_items=4
+    )
+
+    intent_mapping: List[str] = PydanticV1Field(  # ← Changed from List[Literal[...]]
+        ...,  # Required field - NO default!
+        description=(
+            "Exactly 4 intent categories matching the 4 options. "
+            "Each value must be one of: 'self_expression', 'wellness', 'skill_growth', 'ambition', 'belonging', 'unsure'. "
+            "Example: ['belonging', 'skill_growth', 'wellness', 'unsure']"
+        ),
+        min_items=4,
+        max_items=4
+    )
+
+    class Config:
+        extra = "forbid"
+
+
+# Now add EmotionalToneResponse right after this
+class EmotionalToneResponse(PydanticV1BaseModel):
+    """Strict response format for emotional_tone agent only."""
+
+    affirmation: str = PydanticV1Field(
+        ...,  # Required field (no default)
+        description="Warm, caring reflection sentence (1-2 sentences)",
+        min_length=10
+    )
+
+    question_text: str = PydanticV1Field(
+        ...,  # Required field
+        description="First-person question about emotional feelings",
+        min_length=10
+    )
+
+    options: List[str] = PydanticV1Field(
+        ...,  # Required field
+        description="Exactly 4 answer options",
+        min_items=4,
+        max_items=4
+    )
+
+    emotional_mapping: List[str] = PydanticV1Field(
+        ...,  # Required field - NO default!
+        description=(
+            "Exactly 4 emotional tone categories matching the 4 options. "
+            "Each value must be one of: 'positive', 'neutral', 'tense', 'resistant', 'unsure', 'mixed'. "
+            "Example: ['positive', 'neutral', 'tense', 'unsure']"
+        ),
+        min_items=4,
+        max_items=4
+    )
+
+    class Config:
+        extra = "forbid"
+
+def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: List[str]) -> str:
+    """
+    Determine which intent the user chose based on their input.
+
+    Args:
+        user_input: The user's message (e.g., "A" or "Build new skills")
+        options: List of option texts from previous turn
+        intent_mapping: List of intent categories matching each option
+
+    Returns:
+        The intent category (e.g., "skill_growth", "wellness", "unsure")
+    """
+    if not options or not intent_mapping:
+        return "unsure"
+
+    user_input_clean = user_input.strip().lower()
+
+    # Check if user typed A, B, C, D
+    if len(user_input_clean) == 1 and user_input_clean in ['a', 'b', 'c', 'd']:
+        idx = ord(user_input_clean) - ord('a')
+        if 0 <= idx < len(intent_mapping):
+            return intent_mapping[idx]
+
+    # Check if user typed the full option text
+    for i, option in enumerate(options):
+        if option.lower() in user_input_clean or user_input_clean in option.lower():
+            if i < len(intent_mapping):
+                return intent_mapping[i]
+
+    # Fallback
+    return "unsure"
+
+
+def compute_question_direction(theme_1: str, theme_2: str, current_turn: int) -> str:
+    """
+    Determine if next question should be 'broad' or 'deep'.
+
+    Logic:
+    - Turn 1: Always broad (exploring from ad)
+    - Turn 2: Deep if theme_1 is clear and not unsure, broad otherwise
+    - Turn 3: Deep if theme_1 == theme_2 (consistent), broad if mixed or unsure
+    """
+    if current_turn == 1:
+        return "broad"
+
+    if current_turn == 2:
+        # We have theme_1 now
+        if theme_1 in ["unsure", ""]:
+            return "broad"
+        else:
+            return "deep"  # User showed clear intent in Q1
+
+    if current_turn == 3:
+        # We have theme_1 and theme_2
+        if theme_1 == theme_2 and theme_1 not in ["unsure", ""]:
+            return "deep"  # Consistent intent
+        else:
+            return "broad"  # Mixed or unsure
+
+    return "broad"  # Fallback
+
+
+def should_finalize_intent(theme_1: str, theme_2: str, theme_3: str, ad_theme: str) -> Tuple[bool, str]:
+    """
+    Finalize ONLY after all 3 intent questions have been answered.
+    Majority vote:
+      - If any two match → that theme
+      - If all three different → 'mixed'
+    """
+
+    # --- CASE 1: Haven't reached question 3 yet ---
+    if not theme_3 or theme_3 == "":
+        return False, ""
+
+    # --- CASE 2: We HAVE 3 answers, finalize ALWAYS ---
+    # Majority logic
+    if theme_1 == theme_2:
+        return True, theme_1
+    elif theme_1 == theme_3:
+        return True, theme_1
+    elif theme_2 == theme_3:
+        return True, theme_2
+    else:
+        return True, "mixed"
+
+
+def get_user_chosen_emotional_tone(user_input: str, options: List[str], emotional_mapping: List[str]) -> str:
+    """
+    Determine which emotional tone the user chose based on their input.
+
+    Args:
+        user_input: The user's answer text
+        options: List of 4 option texts
+        emotional_mapping: List of 4 emotional tone categories corresponding to options
+
+    Returns:
+        The emotional tone category the user selected
+    """
+    if not emotional_mapping or len(emotional_mapping) != 4:
+        print(f"WARNING - get_user_chosen_emotional_tone: invalid emotional_mapping: {emotional_mapping}")
+        return "unsure"
+
+    if not options or len(options) != 4:
+        print(f"WARNING - get_user_chosen_emotional_tone: invalid options: {options}")
+        return "unsure"
+
+    user_lower = user_input.lower().strip()
+
+    # Try to match user input to one of the options
+    for i, option in enumerate(options):
+        option_lower = option.lower().strip()
+        # Exact match or significant overlap
+        if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
+            return emotional_mapping[i]
+
+    # Fallback: couldn't determine
+    print(f"WARNING - get_user_chosen_emotional_tone: couldn't match '{user_input}' to options")
+    return "unsure"
+
+
+def compute_final_emotional_tone(emo_tone_1: str, emo_tone_2: str) -> str:
+    """
+    Determine the final emotional tone from 2 answers.
+
+    Logic:
+    1. If both answers are the same tone → use that tone
+    2. If one is "unsure" → use the other tone
+    3. If both are "unsure" → final tone is "unsure"
+    4. If both are different (and neither is unsure) → final tone is "mixed"
+
+    Args:
+        emo_tone_1: Emotional tone from Q1
+        emo_tone_2: Emotional tone from Q2
+
+    Returns:
+        Final emotional tone category
+    """
+    # Normalize inputs
+    tone_1 = (emo_tone_1 or "").lower().strip()
+    tone_2 = (emo_tone_2 or "").lower().strip()
+
+    # If either is missing, return unsure
+    if not tone_1 or not tone_2:
+        return "unsure"
+
+    # RULE 1: Both answers are the same → use that tone
+    if tone_1 == tone_2:
+        return tone_1
+
+    # RULE 2: One is "unsure" → use the other tone
+    if tone_1 == "unsure" and tone_2 != "unsure":
+        return tone_2
+    if tone_2 == "unsure" and tone_1 != "unsure":
+        return tone_1
+
+    # RULE 3: Both are "unsure" → final is "unsure"
+    if tone_1 == "unsure" and tone_2 == "unsure":
+        return "unsure"
+
+    # RULE 4: Both are different (neither is unsure) → "mixed"
+    return "mixed"
+
+
+def should_finalize_emotional_tone(emo_tone_1: str, emo_tone_2: str) -> Tuple[bool, str]:
+    """
+    Determine if emotional tone assessment is complete and what the final tone is.
+
+    Args:
+        emo_tone_1: User's emotional tone from Q1
+        emo_tone_2: User's emotional tone from Q2
+
+    Returns:
+        Tuple of (should_finalize, final_tone)
+        - should_finalize: True if we have 2 answers
+        - final_tone: The determined emotional tone
+    """
+    # Need both answers to finalize
+    if not emo_tone_1 or not emo_tone_2:
+        return (False, "")
+
+    # We have 2 answers, time to finalize
+    # Call the logic function to determine final tone
+    final_tone = compute_final_emotional_tone(emo_tone_1, emo_tone_2)
+
+    return (True, final_tone)
+
+
+def update_intent_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+    """
+    Update intent metadata after user answers, BEFORE the agent runs again.
+
+    This function:
+    1. Classifies the user's answer using stored intent_mapping
+    2. Updates theme_1, theme_2, or theme_3 based on current turn
+    3. Checks if intent should be finalized
+    4. Updates confirm_intent and intent_type
+    """
+    import copy
+
+    # Deep copy to avoid mutations
+    stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
+    intent_block = stage_meta.get("connection_intent", {}) or {}
+    intent_state = dict(intent_block.get("state", {}) or {})
+    intent_meta = dict(intent_block.get("metadata", {}) or {})
+
+    # Get stored mapping from previous agent run
+    prev_intent_mapping = intent_state.get("intent_mapping", [])
+    prev_options = intent_state.get("options", [])
+
+    # Get current turn (which question did they just answer?)
+    current_turn = intent_state.get("turn", 0)
+
+    # Only process if we have a mapping and the user actually answered
+    if not prev_intent_mapping or not user_answer:
+        return state
+
+    # Classify the user's answer
+    chosen_intent = get_user_chosen_intent(user_answer, prev_options, prev_intent_mapping)
+
+    print(
+        f"DEBUG - update_intent_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_intent='{chosen_intent}'")
+
+    # Update theme based on which question they just answered
+    if current_turn == 1:
+        # They just answered Q1
+        intent_state["theme_1"] = chosen_intent
+        intent_state["last_theme"] = chosen_intent
+    elif current_turn == 2:
+        # They just answered Q2
+        intent_state["theme_2"] = chosen_intent
+        intent_state["last_theme"] = chosen_intent
+    elif current_turn == 3:
+        # They just answered Q3
+        intent_state["theme_3"] = chosen_intent
+        intent_state["last_theme"] = chosen_intent
+
+    # Get all three themes
+    theme_1 = intent_state.get("theme_1", "")
+    theme_2 = intent_state.get("theme_2", "")
+    theme_3 = intent_state.get("theme_3", "")
+
+    # Get ad_theme for finalization logic
+    ad_data = state.get("ad_data", {}) or {}
+    ad_theme = ad_data.get("ad_theme", "")
+
+    # Check if we should finalize (after 3 questions)
+    should_finalize, intent_type = should_finalize_intent(theme_1, theme_2, theme_3, ad_theme)
+
+    print(f"DEBUG - should_finalize={should_finalize}, intent_type='{intent_type}'")
+
+    if should_finalize:
+        # We're done with intent questions
+        intent_meta["confirm_intent"] = "clear"
+        intent_meta["intent_type"] = intent_type
+    else:
+        # Keep asking questions
+        intent_meta["confirm_intent"] = "unclear"
+        intent_meta["intent_type"] = ""
+
+    # Write back the updated metadata and state
+    stage_meta["connection_intent"] = {
+        "metadata": intent_meta,
+        "state": intent_state,
+    }
+
+    return {
+        **state,
+        "stage_meta": stage_meta,
+    }
+def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+    """
+    Update emotional tone metadata after user answers, BEFORE the agent runs again.
+
+    This function:
+    1. Classifies the user's answer using stored emotional_mapping
+    2. Updates emo_tone_1 or emo_tone_2 based on current turn
+    3. Checks if emotional tone should be finalized
+    4. Updates confirm_tone and emo_tone
+    """
+    import copy
+
+    # Deep copy to avoid mutations
+    stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
+    tone_block = stage_meta.get("emotional_tone", {}) or {}
+    tone_state = dict(tone_block.get("state", {}) or {})
+    tone_meta = dict(tone_block.get("metadata", {}) or {})
+
+    # Get stored mapping from previous agent run
+    prev_emotional_mapping = tone_state.get("emotional_mapping", [])
+    prev_options = tone_state.get("options", [])
+
+    # Get current turn (which question did they just answer?)
+    current_turn = tone_state.get("turn", 0)
+
+    # Only process if we have a mapping and the user actually answered
+    if not prev_emotional_mapping or not user_answer:
+        return state
+
+    # Classify the user's answer
+    chosen_tone = get_user_chosen_emotional_tone(user_answer, prev_options, prev_emotional_mapping)
+
+    print(
+        f"DEBUG - update_emotional_tone_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_tone='{chosen_tone}'")
+
+    # Update emo_tone based on which question they just answered
+    if current_turn == 1:
+        # They just answered Q1
+        tone_state["emo_tone_1"] = chosen_tone
+    elif current_turn == 2:
+        # They just answered Q2
+        tone_state["emo_tone_2"] = chosen_tone
+
+    # Get both tones
+    emo_tone_1 = tone_state.get("emo_tone_1", "")
+    emo_tone_2 = tone_state.get("emo_tone_2", "")
+
+    # Check if we should finalize (after 2 questions)
+    should_finalize, final_tone = should_finalize_emotional_tone(emo_tone_1, emo_tone_2)
+
+    print(f"DEBUG - should_finalize={should_finalize}, final_tone='{final_tone}'")
+
+    if should_finalize:
+        # We're done with emotional tone questions
+        tone_meta["confirm_tone"] = "clear"
+        tone_meta["emo_tone"] = final_tone
+    else:
+        # Keep asking questions
+        tone_meta["confirm_tone"] = "unclear"
+        tone_meta["emo_tone"] = "unclear"
+
+    # Write back the updated metadata and state
+    stage_meta["emotional_tone"] = {
+        "metadata": tone_meta,
+        "state": tone_state,
+    }
+
+    return {
+        **state,
+        "stage_meta": stage_meta,
+    }
 
 def merge_stage_meta(left: Optional[Dict], right: Optional[Dict]) -> Dict:
     """Deep merge stage_meta dictionaries"""
@@ -140,12 +706,6 @@ class AgentState(TypedDict, total=False):
     exchanges_with_current: int
     last_agent: str
 
-    # Per-agent metadata/state from last turns.
-    # After the refactor, each agent will store:
-    #   stage_meta[info_type] = {
-    #       "metadata": {...},  # AgentResponse.metadata
-    #       "state": {...},     # AgentResponse.state
-    #   }
     stage_meta: Annotated[Dict[str, Dict[str, Any]], merge_stage_meta]
 
     # Last answer options shown to the user (for the UI to render)
@@ -156,6 +716,58 @@ class AgentState(TypedDict, total=False):
 
     # Persistent, cross-agent user profile.
     user_profile: Dict[str, Any]
+def compute_final_intent_from_state(
+    state_block: Dict[str, Any],
+    ad_theme: str,
+    ) -> str:
+    """
+    Deterministic implementation of the TURN 4 rules for intent finalization.
+
+    Inputs:
+      - state_block: the 'state' dict from stage_meta['connection_intent']['state']
+      - ad_theme: ad_data['ad_theme'] (may be "")
+
+    Output:
+      - intent_type: one of "unsure", "self_expression", "wellness",
+        "skill_growth", "ambition", "belonging", or "mixed".
+    """
+    theme_1 = state_block.get("theme_1", "") or ""
+    theme_2 = state_block.get("theme_2", "") or ""
+    theme_3 = state_block.get("theme_3", "") or ""
+    ad_theme = ad_theme or ""
+
+    # STEP 1 – how many times was the user explicitly "unsure"?
+    themes = [theme_1, theme_2, theme_3]
+    uncertain_total = sum(1 for t in themes if t == "unsure")
+
+    # RULE 1 – UNSURE CASE (highest priority)
+    if uncertain_total >= 2:
+        return "unsure"
+
+    # RULE 2 – REPEATING THEME CASE
+    # look at [theme_1, theme_2, theme_3, ad_theme], ignoring "" and "unsure"
+    seq = [theme_1, theme_2, theme_3, ad_theme]
+    filtered = [t for t in seq if t and t != "unsure"]
+
+    if filtered:
+        counts = Counter(filtered)
+        max_count = max(counts.values())
+        if max_count >= 2:
+            # candidates with the max count
+            candidates = [t for t, c in counts.items() if c == max_count]
+
+            # tie-break: prefer the most recent user-driven theme:
+            # theme_3 > theme_2 > theme_1 > ad_theme
+            priority_order = [theme_3, theme_2, theme_1, ad_theme]
+            for p in priority_order:
+                if p in candidates:
+                    return p
+
+            # fallback if something is weird
+            return candidates[0]
+
+    # RULE 3 – MIXED CASE (fallback)
+    return "mixed"
 
 
 class _SafeDict(dict):
@@ -186,43 +798,95 @@ class BaseAgent(ABC):
         """Provide a mock response when OpenAI is unavailable."""
         raise NotImplementedError
 
-    def build_context(self, state: AgentState, user_text: str) -> Dict[str, str]:
-        """Build the context dictionary for template rendering."""
+    def build_context(self, state: AgentState, user_text: str) -> Dict[str, Any]:
+        """Build context dictionary for template rendering."""
         stage_meta = state.get("stage_meta", {}) or {}
-        block = stage_meta.get(self.info_type, {}) or {}
-        meta = block.get("metadata", {}) or {}
-        last_state_json = block.get("state", {}) or {}
+        my_block = stage_meta.get(self.info_type, {}) or {}
+        my_meta = my_block.get("metadata", {}) or {}
+        my_state = my_block.get("state", {}) or {}
 
-        turns_for_info = len(state.get("collected_info", {}).get(self.info_type, []))
-        last_intent_status = (
-            meta.get("confirm_intent")
-            or meta.get("intent_status")
-            or ""
-        )
+        history = state.get("messages", [])
+        hist_str = "\n".join([f"{m.__class__.__name__}: {m.content}" for m in history[-10:]])
 
-        # Build ad context
+        collected = state.get("collected_info", {}) or {}
+        collected_str = json.dumps(collected, ensure_ascii=False, indent=2)
+
         ad_data = state.get("ad_data", {}) or {}
-        ad_context = f"""Ad Context:
-- Campaign: {ad_data.get('campaign_name', 'unknown')}
-- Theme: {ad_data.get('ad_creative_theme', 'unknown')}
-- Target Audience: {ad_data.get('target_audience', 'unknown')}
-- Source: {ad_data.get('utm_source', 'unknown')}
-"""
+        ad_ctx_str = json.dumps(ad_data, ensure_ascii=False, indent=2)
 
-        # Build conversation history
-        last_msgs = list(state.get("messages", []))[-8:]
-        history = "\n".join([getattr(m, "content", "") for m in last_msgs])
+        state_json_str = json.dumps(my_state, ensure_ascii=False, indent=2)
 
-        return {
-            "history": history,
+        # Determine selected_option
+        selected_option = ""
+        if history:
+            last_msg = history[-1]
+            if isinstance(last_msg, HumanMessage):
+                selected_option = last_msg.content.strip()
+
+        ctx = {
+            "history": hist_str,
             "user_text": user_text,
-            "last_agent": state.get("last_agent", "conversation"),
-            "turns_for_info": str(turns_for_info),
-            "last_intent": last_intent_status,
-            "collected_info": json.dumps(state.get("collected_info", {}), ensure_ascii=False),
-            "state_json": json.dumps(last_state_json, ensure_ascii=False),
-            "ad_context": ad_context,
+            "collected_info": collected_str,
+            "ad_context": ad_ctx_str,
+            "state_json": state_json_str,
+            "selected_option": selected_option,
+            "ad_theme": ad_data.get("ad_theme", ""),
         }
+
+        # FOR CONNECTION_INTENT AGENT: compute last_intent and question_direction
+        if self.info_type == "connection_intent":
+            stage_meta = state.get("stage_meta", {}) or {}
+            intent_block = stage_meta.get("connection_intent", {}) or {}
+            intent_state = intent_block.get("state", {}) or {}
+
+            current_turn = intent_state.get("turn", 0)
+            ad_data = state.get("ad_data", {}) or {}
+            ad_theme = ad_data.get("ad_theme", "")
+
+            theme_1 = intent_state.get("theme_1", "")
+            theme_2 = intent_state.get("theme_2", "")
+            last_theme = intent_state.get("last_theme", "")
+
+            # Determine last_intent
+            if current_turn == 0:
+                # First turn - use ad_theme
+                last_intent = ad_theme
+            else:
+                # Use last_theme if available, otherwise ad_theme
+                last_intent = last_theme if last_theme else ad_theme
+
+            # Compute question_direction
+            question_direction = compute_question_direction(theme_1, theme_2, current_turn + 1)
+
+            ctx["last_intent"] = last_intent
+            ctx["question_direction"] = question_direction
+
+        # FOR EMOTIONAL_TONE AGENT: get last_intent from connection_intent results
+        if self.info_type == "emotional_tone":
+            stage_meta = state.get("stage_meta", {}) or {}
+
+            # Get the finalized intent from connection_intent agent
+            intent_block = stage_meta.get("connection_intent", {}) or {}
+            intent_meta = intent_block.get("metadata", {}) or {}
+            intent_state = intent_block.get("state", {}) or {}
+
+            # Use the finalized intent_type, or fall back to last_theme, or ad_theme
+            intent_type = intent_meta.get("intent_type", "")
+            last_theme = intent_state.get("last_theme", "")
+            ad_data = state.get("ad_data", {}) or {}
+            ad_theme = ad_data.get("ad_theme", "")
+
+            # Determine last_intent for emotional tone questions
+            if intent_type:
+                last_intent = intent_type  # Use finalized intent
+            elif last_theme:
+                last_intent = last_theme
+            else:
+                last_intent = ad_theme
+
+            ctx["last_intent"] = last_intent
+
+        return ctx
 
     def prepare_messages(self, ctx: Dict[str, str], state: AgentState) -> List[BaseMessage]:
         """Prepare the message list for LLM invocation."""
@@ -252,22 +916,84 @@ class BaseAgent(ABC):
                 temperature=OPENAI_TEMPERATURE,
                 max_tokens=2500,
             )
-            structured_llm = llm.with_structured_output(AgentResponse)
-            response: AgentResponse = structured_llm.invoke(msgs)
+
+            # Use strict schema for connection_intent agent
+            if self.info_type == "connection_intent":
+                structured_llm = llm.with_structured_output(ConnectionIntentResponse)
+                strict_response: ConnectionIntentResponse = structured_llm.invoke(msgs)
+                # Convert to AgentResponse format
+                response = AgentResponse(
+                    affirmation=strict_response.affirmation,
+                    question_text=strict_response.question_text,
+                    options=strict_response.options,
+                    intent_mapping=strict_response.intent_mapping,
+                    metadata={},
+                    state={}
+                )
+            # Use strict schema for emotional_tone agent
+            elif self.info_type == "emotional_tone":
+                structured_llm = llm.with_structured_output(EmotionalToneResponse)
+                strict_response: EmotionalToneResponse = structured_llm.invoke(msgs)
+                # Convert to AgentResponse format
+                response = AgentResponse(
+                    affirmation=strict_response.affirmation,
+                    question_text=strict_response.question_text,
+                    options=strict_response.options,
+                    intent_mapping=strict_response.emotional_mapping,  # Map emotional_mapping to intent_mapping
+                    metadata={},
+                    state={}
+                )
+            else:
+                # Use flexible schema for other agents
+                structured_llm = llm.with_structured_output(AgentResponse)
+                response: AgentResponse = structured_llm.invoke(msgs)
+
             return response
 
         except Exception as e:
             print(f"Error with structured output: {e}")
             import traceback
-
             traceback.print_exc()
-            mock_text = self.get_mock_response(user_text, state)
-            return AgentResponse(
-                question_text=mock_text,
-                options=[],
-                metadata={"error": str(e)},
-                state={},
-            )
+
+            # Return a proper fallback response for connection_intent agent
+            if self.info_type == "connection_intent":
+                return AgentResponse(
+                    affirmation="I'd love to understand what brings you here today.",
+                    question_text="When I think about what I'm hoping for right now, I feel most drawn to...",
+                    options=[
+                        "Expressing myself creatively",
+                        "Learning something new",
+                        "Finding some calm",
+                        "I'm not quite sure yet"
+                    ],
+                    intent_mapping=["self_expression", "skill_growth", "wellness", "unsure"],
+                    metadata={"error": str(e)},
+                    state={},
+                )
+            # Return a proper fallback response for emotional_tone agent
+            elif self.info_type == "emotional_tone":
+                return AgentResponse(
+                    affirmation="It's completely okay to feel however you're feeling right now.",
+                    question_text="When I think about taking this step, I feel...",
+                    options=[
+                        "Excited and ready",
+                        "Curious but cautious",
+                        "A bit overwhelmed",
+                        "I'm not sure yet"
+                    ],
+                    intent_mapping=["positive", "neutral", "tense", "unsure"],
+                    metadata={"error": str(e)},
+                    state={},
+                )
+            else:
+                # Fallback for other agents
+                mock_text = self.get_mock_response(user_text, state)
+                return AgentResponse(
+                    question_text=mock_text,
+                    options=[],
+                    metadata={"error": str(e)},
+                    state={},
+                )
 
     def process(self, state: AgentState) -> AgentState:
         """Main processing method called by LangGraph."""
@@ -277,8 +1003,14 @@ class BaseAgent(ABC):
         response = self.generate_response(user_text, state)
         print(f"\n\n====== {self.name} AgentResponse ======\n", response, "\n===========================\n\n")
 
-        # Build user-facing text: question + enumerated options
-        display_text = response.question_text or ""
+        # Build user-facing text: affirmation + question + enumerated options
+        display_text = ""
+
+        if response.affirmation:
+            display_text = response.affirmation + "\n\n"
+
+        display_text += response.question_text or ""
+
         if response.options:
             lines = []
             for i, opt in enumerate(response.options):
@@ -286,34 +1018,310 @@ class BaseAgent(ABC):
                 lines.append(f"{label}) {opt}")
             display_text = display_text.rstrip() + "\n\n" + "\n".join(lines)
 
-        # Update stage_meta for this agent with the new metadata and state
         import copy
+        # ------------------------------------------------------------------
+        # STAGE META MERGE + HARD STATE MACHINE FOR connection_intent
+        # ------------------------------------------------------------------
+        # Start from previous stage_meta snapshot
+        stage_meta_prev = copy.deepcopy(state.get("stage_meta", {}) or {})
 
-        new_stage_meta = copy.deepcopy(state.get("stage_meta", {}))
-        new_stage_meta[self.info_type] = {
-            "metadata": dict(response.metadata or {}),
-            "state": dict(response.state or {}),
-        }
+        # Previous block for this agent
+        old_block = stage_meta_prev.get(self.info_type) or {}
+        old_meta = dict(old_block.get("metadata") or {})
+        old_state = dict(old_block.get("state") or {})
 
-        print(f"DEBUG - {self.name} - metadata: {response.metadata}")
-        print(f"DEBUG - {self.name} - state: {response.state}")
+        # New stuff coming from the model
+        resp_meta = dict(response.metadata or {})
+        resp_state = dict(response.state or {})
+
+        # Start new_meta/new_state as copies of old, then merge in model output
+        new_meta = dict(old_meta)
+        new_state = dict(old_state)
+
+        if resp_meta:
+            new_meta.update(resp_meta)
+        if resp_state:
+            new_state.update(resp_state)
+
+        # ---------- HARD TURN / LEVEL / METADATA LOGIC FOR CONNECTION INTENT ----------
+        # ---------- SIMPLIFIED CONNECTION_INTENT LOGIC ----------
+        if self.info_type == "connection_intent":
+            # Get current turn from old_state
+            old_turn = old_state.get("turn", 0)
+            try:
+                old_turn = int(old_turn)
+            except (TypeError, ValueError):
+                old_turn = 0
+
+            # Increment turn
+            current_turn = old_turn + 1
+            new_state["turn"] = current_turn
+
+            # Initialize fields on turn 1
+            if current_turn == 1:
+                ad_data = state.get("ad_data", {}) or {}
+                ad_theme = ad_data.get("ad_theme", "")
+                new_state["ad_theme"] = ad_theme
+                new_state["theme_1"] = ""
+                new_state["theme_2"] = ""
+                new_state["theme_3"] = ""
+                new_state["last_theme"] = ad_theme  # Start with ad_theme
+
+            # Set level based on turn
+            if current_turn == 1:
+                new_state["last_level"] = "L1"
+            elif current_turn == 2:
+                new_state["last_level"] = "L2"
+            elif current_turn == 3:
+                new_state["last_level"] = "L3"
+            else:
+                new_state["last_level"] = "L4"
+
+            # Store intent_mapping and options for next turn's classification
+            if response.intent_mapping:
+                new_state["intent_mapping"] = response.intent_mapping
+            if response.options:
+                new_state["options"] = response.options
+
+            # Keep metadata fields (these will be updated by update_intent_metadata_after_answer)
+            new_meta.setdefault("confirm_intent", "unclear")
+            new_meta.setdefault("intent_type", "")
+            new_state.setdefault("last_theme", "")
+            stage_meta_prev[self.info_type] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+
+        # ---------- HARD TURN / LEVEL / METADATA LOGIC FOR EMOTIONAL_TONE ----------
+        if self.info_type == "emotional_tone":
+            # Get current turn from old_state
+            old_turn = old_state.get("turn", 0)
+            try:
+                old_turn = int(old_turn)
+            except (TypeError, ValueError):
+                old_turn = 0
+
+            # Increment turn
+            current_turn = old_turn + 1
+            new_state["turn"] = current_turn
+
+            # Initialize fields on turn 1
+            if current_turn == 1:
+                new_state["emo_tone_1"] = ""
+                new_state["emo_tone_2"] = ""
+
+            # Store emotional_mapping and options from LLM response
+            if response.intent_mapping:  # emotional_mapping was mapped to intent_mapping
+                new_state["emotional_mapping"] = response.intent_mapping
+            if response.options:
+                new_state["options"] = response.options
+
+            # Keep metadata fields (these will be updated by update_emotional_tone_metadata_after_answer)
+            new_meta.setdefault("confirm_tone", "unclear")
+            new_meta.setdefault("emo_tone", "unclear")
+
+            stage_meta_prev[self.info_type] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+
+            # ----- SPECIAL CASE: LOGIC FINALIZER -----
+        if self.name == "logic_finalize":
+            # Get the most up-to-date state for connection_intent
+            ci_state_block = dict(new_state)
+
+            # Pull ad_theme from ad_data in the global state
+            ad_data = state.get("ad_data", {}) or {}
+            ad_theme = ad_data.get("ad_theme", "") or ""
+
+            # Compute final intent_type deterministically
+            final_intent_type = compute_final_intent_from_state(
+                ci_state_block,
+                ad_theme=ad_theme,
+            )
+
+            # Finalizer always sets confirm_intent = "clear"
+            new_meta["intent_type"] = final_intent_type
+            new_meta["confirm_intent"] = "clear"
+
+            # Mark this as the final (TURN 4) snapshot
+            new_state["turn"] = 4
+            new_state["last_level"] = "L4"
+
+            # Update last_theme if we have a clear non-unsure, non-mixed category
+            if final_intent_type not in ("unsure", "mixed", ""):
+                new_state["last_theme"] = final_intent_type
+        if self.info_type == "connection_tone":
+            # 1) Hard-control the tone turn counter in Python (ignore LLM's turn)
+            #    We treat turns as PHASES: 1 = Q1, 2 = Q2, 3 = FINAL, 4 = DONE.
+            old_turn = old_state.get("turn", 1)
+            try:
+                incoming_turn = int(old_turn)
+            except (TypeError, ValueError):
+                incoming_turn = 1
+
+            if incoming_turn <= 0:
+                incoming_turn = 1
+
+            # Map incoming_turn -> next_turn
+            # YAML says: turn 1 = Q1, turn 2 = Q2, turn 3 = FINAL, turn 4 = DONE
+            if incoming_turn <= 1:
+                next_turn = 2  # Q1 outputs turn=2
+            elif incoming_turn == 2:
+                next_turn = 3  # Q2 outputs turn=3
+            elif incoming_turn == 3:
+                next_turn = 4  # FINAL outputs turn=4
+            else:
+                next_turn = 4  # Stay at 4 for safety
+
+            print(f"DEBUG connection_tone - incoming_turn={incoming_turn}, next_turn will be={next_turn}")
+
+            new_state["turn"] = next_turn
+
+            # Simple level mapping for tone (just for debug / UI)
+            if next_turn == 2:
+                new_state["last_level"] = "L1"
+            elif next_turn == 3:
+                new_state["last_level"] = "L2"
+            else:
+                new_state["last_level"] = "L3"
+
+            # 2) Enforce per-turn emotional tone invariants
+            #
+            # TURN 1→2 (Q1 phase):
+            #   - emo_tone_1 MUST be "" (no classification yet)
+            #   - emo_tone_2 MUST be ""
+            #
+            # TURN 2→3 (Q2 phase):
+            #   - emo_tone_1 may be filled by the LLM from Q1
+            #   - emo_tone_2 MUST stay ""
+            #
+            # TURN 3→4 (FINAL phase):
+            #   - LLM sets emo_tone_2 + final emo_tone / confirm_tone
+            #
+            # TURN 4+ (DONE phase):
+            #   - Everything stays as-is
+
+            if incoming_turn <= 1:
+                # Q1 phase - first tone question → wipe any premature tone labels
+                new_state["emo_tone_1"] = ""
+                new_state["emo_tone_2"] = ""
+                new_state.setdefault("emo_tone_3", "")
+                # Ensure metadata fields exist
+                new_meta.setdefault("emo_tone", "unclear")
+                new_meta.setdefault("emo_tone_type", "")
+                new_meta.setdefault("confirm_tone", "unclear")
+
+            elif incoming_turn == 2:
+                # Q2 phase - emo_tone_1 should already be set by LLM from Q1
+                # Keep emo_tone_2 blank until Turn 3
+                new_state.setdefault("emo_tone_1", "")  # keep it if already set
+                new_state["emo_tone_2"] = ""  # not set yet
+                new_state.setdefault("emo_tone_3", "")
+                # Keep tone unclear during Q2
+                new_meta.setdefault("emo_tone", "unclear")
+                new_meta.setdefault("emo_tone_type", "")
+                new_meta.setdefault("confirm_tone", "unclear")
+
+            elif incoming_turn == 3:
+                # FINAL phase - LLM should set emo_tone_2 + final classification
+                new_state.setdefault("emo_tone_1", "")
+                new_state.setdefault("emo_tone_2", "")  # LLM MUST populate this now
+                new_state.setdefault("emo_tone_3", "")
+
+                # Safety check: if LLM didn't set emo_tone_2, log warning
+                if not new_state.get("emo_tone_2"):
+                    print("WARNING: emo_tone_2 not set by LLM during FINAL phase")
+
+                # Safety check: if LLM didn't set confirm_tone to "clear", force it
+                if new_meta.get("confirm_tone") != "clear":
+                    print("WARNING: LLM didn't set confirm_tone='clear' in FINAL phase, forcing it")
+                    new_meta["confirm_tone"] = "clear"
+
+                    # If LLM also didn't set final emo_tone, compute it as fallback
+                    if not new_meta.get("emo_tone") or new_meta.get("emo_tone") == "unclear":
+                        emo_1 = new_state.get("emo_tone_1", "")
+                        emo_2 = new_state.get("emo_tone_2", "")
+
+                        if emo_1 and emo_2:
+                            if emo_1 == emo_2 and emo_1 != "unsure":
+                                final_tone = emo_1
+                            elif emo_1 == "unsure" and emo_2 == "unsure":
+                                final_tone = "unsure"
+                            else:
+                                final_tone = "mixed"
+                        elif emo_1:
+                            final_tone = emo_1
+                        elif emo_2:
+                            final_tone = emo_2
+                        else:
+                            final_tone = "unsure"
+
+                        print(f"FALLBACK: Computing final tone as '{final_tone}' from emo_1={emo_1}, emo_2={emo_2}")
+                        new_meta["emo_tone"] = final_tone
+                        new_meta["emo_tone_type"] = final_tone
+
+            else:
+                # DONE phase (turn >= 4) - don't ask more questions
+                new_state.setdefault("emo_tone_1", "")
+                new_state.setdefault("emo_tone_2", "")
+                new_state.setdefault("emo_tone_3", "")
+                # Ensure confirm_tone stays "clear"
+                if new_meta.get("confirm_tone") != "clear":
+                    print("WARNING: confirm_tone not 'clear' in DONE phase, fixing")
+                    new_meta["confirm_tone"] = "clear"
+
+            # 3) Copy canonical intent from connection_intent into tone metadata
+            intent_block = stage_meta_prev.get("connection_intent") or {}
+            intent_meta = intent_block.get("metadata") or {}
+
+            canonical_intent_type = intent_meta.get("intent_type")
+            canonical_confirm_intent = intent_meta.get("confirm_intent")
+
+            if canonical_intent_type is not None:
+                new_meta["intent_type"] = canonical_intent_type
+            if canonical_confirm_intent is not None:
+                new_meta["confirm_intent"] = canonical_confirm_intent
+
+            # 4) Normalize behavioral_signal to a safe default if it's weird/empty
+            allowed_signals = {
+                "first_timer",
+                "hobbyist",
+                "busy_adult",
+                "ambitious_learner",
+                "mixed",
+            }
+            if new_meta.get("behavioral_signal") not in allowed_signals:
+                new_meta["behavioral_signal"] = "mixed"
+
+            # 5) Write back the corrected tone block
+            stage_meta_prev["connection_tone"] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+
+        print(f"DEBUG - {self.name} - metadata: {new_meta}")
+        print(f"DEBUG - {self.name} - state: {new_state}")
 
         # Update collected info
         merged_collected = dict(state.get("collected_info", {}))
+
         if user_text:
             merged_collected.setdefault(self.info_type, []).append(user_text)
 
         return AgentState(
             messages=[AIMessage(content=display_text)],
             collected_info=merged_collected,
-            stage_meta=new_stage_meta,
+            stage_meta=stage_meta_prev,
             exchanges_with_current=state.get("exchanges_with_current", 0) + 1,
-            last_agent=self.info_type,
+            last_agent=self.name,
         )
-
 class SupervisorDecision(PydanticV1BaseModel):
     next_agent: str = PydanticV1Field(
-        description="Which agent should run next. One of: connection, wellness, creativity, monetization, FINISH."
+        description=(
+            "Which agent should run next. One of: "
+            "connection_intent, connection_tone, wellness, creativity, monetization, FINISH."
+        )
     )
     reason: str = PydanticV1Field(
         description="Short explanation of why you chose this route.",
@@ -389,11 +1397,17 @@ class MonetizationAgent(BaseAgent):
 def create_agent(agent_type: str, name: str, system: str, human_template: str, info_type: str) -> BaseAgent:
     """Factory function to create the appropriate agent subclass based on type."""
     agent_map = {
-        "connection": ConnectionAgent,
+        # Stage 1 – Connection split
+        "connection_intent": ConnectionAgent,   # new intent agent
+        "connection_tone": ConnectionAgent,     # new emotional tone agent
+
+        # Stage 2 – Deep dives
         "wellness": WellnessAgent,
         "wellness_deep": WellnessAgent,  # alias
+
         "creativity": CreativityAgent,
         "creativity_deep": CreativityAgent,  # alias
+
         "monetization": MonetizationAgent,
         "side_hustle": MonetizationAgent,  # alias
     }
@@ -426,37 +1440,47 @@ class Supervisor:
         collected = state.get("collected_info", {})
         stage_meta = state.get("stage_meta", {}) or {}
 
-        conn_block = stage_meta.get("connection", {}) or {}
-        conn_meta = conn_block.get("metadata", {}) or {}
+        # --- Read INTENT block (connection_intent) ---
+        intent_block = stage_meta.get("connection_intent", {}) or {}
+        intent_meta = intent_block.get("metadata", {}) or {}
 
-        conn_turns = len(collected.get("connection", []))
+        # --- Read TONE block (connection_tone) ---
+        tone_block = stage_meta.get("connection_tone", {}) or {}
+        tone_meta = tone_block.get("metadata", {}) or {}
 
+        # Status fields
         intent_status = (
-            conn_meta.get("confirm_intent")
-            or conn_meta.get("intent_status")
-            or ""
+                intent_meta.get("confirm_intent")
+                or intent_meta.get("intent_status")
+                or ""
+        ).lower()
+        intent_type = (intent_meta.get("intent_type") or "").lower()
+        emo_tone = (
+                tone_meta.get("emo_tone")
+                or tone_meta.get("emotional_tone")
+                or "unclear"
         ).lower()
 
-        emotional_tone = (
-            conn_meta.get("emo_tone")
-            or conn_meta.get("emotional_tone")
-            or ""
-        ).lower()
-
-        intent_type = (conn_meta.get("intent_type") or "").lower()
+        # Turn counts per agent (fallback to counts of collected answers)
+        intent_turns = len(collected.get("connection_intent", []))
+        tone_turns = len(collected.get("connection_tone", []))
+        total_turns = intent_turns + tone_turns
 
         ad_data = state.get("ad_data", {}) or {}
         ad_theme = ad_data.get("ad_creative_theme", "").lower()
 
         print(
-            f"DEBUG SUPERVISOR (fallback) - conn_turns: {conn_turns}, "
-            f"intent_status: {intent_status}, emotional_tone: {emotional_tone}, "
+            f"DEBUG SUPERVISOR (fallback) - intent_turns: {intent_turns}, "
+            f"tone_turns: {tone_turns}, total_turns: {total_turns}, "
+            f"intent_status: {intent_status}, emo_tone: {emo_tone}, "
             f"ad_theme: {ad_theme}, intent_type: {intent_type}"
         )
 
-        # Stage 1 exit readiness
-        ready = (intent_status == "clear") and (emotional_tone != "resistant")
-        if ready or conn_turns >= 3:
+        # Stage 1 exit readiness (roughly mirror YAML logic)
+        ready = (intent_status in ("clear", "unsure")) and (emo_tone not in ("resistant", "unclear"))
+
+        # --- If ready for deep stage or we've hit max turns, route out of Stage 1 ---
+        if ready or total_turns >= 6:
             routing_map = {
                 "wellness": ["wellness_deep", "wellness"],
                 "mindfulness": ["wellness_deep", "wellness"],
@@ -483,20 +1507,34 @@ class Supervisor:
 
             print(
                 f"DEBUG SUPERVISOR (fallback) - FINISHING Stage 1 "
-                f"(ready={ready}, conn_turns={conn_turns})"
+                f"(ready={ready}, total_turns={total_turns})"
             )
             return {"next_agent": "FINISH", "exchanges_with_current": 0}
 
-        # Otherwise, stay in connection
-        if "connection" in self.agent_keys:
-            print("DEBUG SUPERVISOR (fallback) - Continuing with connection agent")
-            return {
-                "agent_index": self.agent_keys.index("connection"),
-                "next_agent": "connection",
-                "exchanges_with_current": 0,
-            }
+        # --- Otherwise, we're still in Stage 1: pick the right connection sub-agent ---
 
-        # No connection agent present → finish
+        # 1) If intent is still unclear → keep working with intent agent
+        if intent_status in ("", "unclear"):
+            if "connection_intent" in self.agent_keys:
+                print("DEBUG SUPERVISOR (fallback) - Continuing with connection_intent agent")
+                return {
+                    "agent_index": self.agent_keys.index("connection_intent"),
+                    "next_agent": "connection_intent",
+                    "exchanges_with_current": 0,
+                }
+
+        # 2) If intent is set but tone is unclear → move to tone agent
+        if emo_tone in ("", "unclear"):
+            if "connection_tone" in self.agent_keys:
+                print("DEBUG SUPERVISOR (fallback) - Routing to connection_tone agent")
+                return {
+                    "agent_index": self.agent_keys.index("connection_tone"),
+                    "next_agent": "connection_tone",
+                    "exchanges_with_current": 0,
+                }
+
+        # 3) If neither sub-agent is available for some reason → finish
+        print("DEBUG SUPERVISOR (fallback) - No connection_intent/tone agent present → FINISH")
         return {"next_agent": "FINISH", "exchanges_with_current": 0}
 
     # ------------------------------------------------------------------
@@ -504,17 +1542,51 @@ class Supervisor:
     # ------------------------------------------------------------------
     def build_context(self, state: AgentState) -> Dict[str, str]:
         """
-        Build the JSON-stringified context passed into the supervisor prompts.
-        This is what the supervisor LLM will see.
+        Build the context passed into the supervisor prompts.
+        Extracts key variables from stage_meta for easy access by the LLM.
         """
+        stage_meta = state.get("stage_meta", {}) or {}
+
+        # Extract intent info
+        intent_block = stage_meta.get("connection_intent", {}) or {}
+        intent_meta = intent_block.get("metadata", {}) or {}
+        intent_state = intent_block.get("state", {}) or {}
+
+        intent_status = intent_meta.get("confirm_intent", "unclear")
+        intent_turn = intent_state.get("turn", 0)
+
+        # Extract tone info - try emotional_tone first, fallback to connection_tone
+        tone_block = stage_meta.get("emotional_tone", {}) or stage_meta.get("connection_tone", {}) or {}
+        tone_meta = tone_block.get("metadata", {}) or {}
+        tone_state = tone_block.get("state", {}) or {}
+
+        confirm_tone = tone_meta.get("confirm_tone", "unclear")
+        tone_turn = tone_state.get("turn", 0)
+        emo_tone_1 = tone_state.get("emo_tone_1", "")
+        emo_tone_2 = tone_state.get("emo_tone_2", "")
+        emo_tone = tone_meta.get("emo_tone", "unclear")
+
         return {
-            "stage_meta": json.dumps(state.get("stage_meta", {}), ensure_ascii=False),
+            # Raw JSON (for reference if supervisor needs full context)
+            "stage_meta": json.dumps(stage_meta, ensure_ascii=False),
             "collected_info": json.dumps(state.get("collected_info", {}), ensure_ascii=False),
             "ad_data": json.dumps(state.get("ad_data", {}), ensure_ascii=False),
             "user_profile": json.dumps(state.get("user_profile", {}), ensure_ascii=False),
-            "last_agent": state.get("last_agent", "") or "",
-        }
 
+            # Extracted variables for easy access by supervisor LLM
+            "last_agent": state.get("last_agent", "") or "",
+
+            # Intent variables
+            "intent_status": intent_status,
+            "intent_turn": str(intent_turn),
+
+            # Tone variables
+            "confirm_tone": confirm_tone,
+            "tone_turn": str(tone_turn),
+            "emo_tone_1": emo_tone_1,
+            "emo_tone_2": emo_tone_2,
+            "emo_tone": emo_tone,
+        }
     def prepare_messages(self, ctx: Dict[str, str]) -> List[BaseMessage]:
         """
         Prepare the System + Human messages for the supervisor LLM,
@@ -602,18 +1674,65 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
 
     main_keys = list(agents.keys())
 
+    def route_after_agent(state: AgentState) -> str:
+        """
+        After an agent runs, ALWAYS end this graph execution to wait for user input.
+        The next graph.invoke() will start fresh from the supervisor based on updated metadata.
+        """
+        last_agent = state.get("last_agent", "")
+
+        print(f"DEBUG - route_after_agent: last_agent={last_agent}, ending to wait for user")
+
+        # ALWAYS END after agent runs - this allows UI to wait for user input
+        return "END"
+
     def route_from_supervisor(state: AgentState) -> str:
+        """
+        Decide which node to go to next based on supervisor output,
+        with HARD GUARDRAILS that override bad LLM decisions.
+        """
+        # What the LLM supervisor suggested
         nxt = (state.get("next_agent") or "").lower()
+
+        # Read tone status from stage_meta (if present)
+        stage_meta = state.get("stage_meta", {}) or {}
+        tone_block = stage_meta.get("connection_tone", {}) or {}
+        tone_meta = tone_block.get("metadata", {}) or {}
+
+        # New tone fields you want to use
+        tone_status = (tone_meta.get("confirm_tone") or "").lower()
+        # tone_status: "" or "unclear" means tone not finalized
+
+        # 🔒 HARD RULE:
+        # If supervisor tries to FINISH but tone is not confirmed yet,
+        # FORCE it to go to connection_tone instead (if that agent exists).
+        if nxt in ("finish", "end") and tone_status in ("", "unclear"):
+            if "connection_tone" in main_keys:
+                print("DEBUG ROUTER - Overriding FINISH → connection_tone because confirm_tone is not clear.")
+                return "connection_tone"
+
+        # Normal FINISH handling (only when tone_status is clear or we don't care)
         if nxt in ("finish", "end"):
             return "END"
+
+        # Otherwise, route to the requested agent if it exists
         return nxt if nxt in main_keys else (main_keys[0] if main_keys else "END")
 
+    # Map supervisor → next_agent (or END)
     edges_map = {k: k for k in main_keys}
     edges_map.update({"END": END})
     workflow.add_conditional_edges("supervisor", route_from_supervisor, edges_map)
 
+    # Map each agent to its next node
+    # Map each agent to its next node
     for k in main_keys:
-        workflow.add_edge(k, END)
+        if k == "logic_finalize":
+            # After logic_finalize, go back to supervisor within the same invoke
+            workflow.add_edge("logic_finalize", "supervisor")
+        else:
+            # All agents (including connection_intent) end after running
+            # This allows UI to wait for user input before next graph.invoke()
+            workflow.add_edge(k, END)
 
     workflow.set_entry_point("supervisor")
     return workflow.compile()
@@ -642,10 +1761,6 @@ def extract_options(text: str) -> Tuple[str, List[str]]:
 
 
 def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, AgentState]:
-    if (state.get("next_agent") or "").upper() == "FINISH":
-        state["last_options"] = []
-        return "We've collected everything we need. Thanks!", state
-
     print(f"DEBUG - Input state stage_meta: {state.get('stage_meta', {})}")
 
     before = len(state.get("messages", []))
@@ -654,17 +1769,39 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
         "messages": list(state.get("messages", [])) + [HumanMessage(content=msg)],
         "user_input": msg,
     }
+
+    #  Ensure tone block and emo fields exist BEFORE graph.invoke
+    state = ensure_tone_block(state)
+    # Update intent metadata if user answered an intent question
+    last_agent = state.get("last_agent", "")
+
+    # Update intent metadata if user answered an intent question
+    if last_agent == "connection_intent" and msg:
+        state = update_intent_metadata_after_answer(state, msg)
+        print(
+            f"DEBUG - After intent metadata update: confirm_intent={state.get('stage_meta', {}).get('connection_intent', {}).get('metadata', {}).get('confirm_intent')}")
+
+    # Update emotional tone metadata if user answered an emotional tone question
+    if last_agent == "emotional_tone" and msg:
+        state = update_emotional_tone_metadata_after_answer(state, msg)
+        print(
+            f"DEBUG - After emotional tone metadata update: confirm_tone={state.get('stage_meta', {}).get('emotional_tone', {}).get('metadata', {}).get('confirm_tone')}")
+
     new_state = graph.invoke(state)
-
-    print(f"DEBUG - Output state stage_meta: {new_state.get('stage_meta', {})}")
-
-    after = new_state.get("messages", [])
-    ai_msgs = [m for m in after[before:] if isinstance(m, AIMessage)]
-    raw_ai_text = "\n\n".join([m.content for m in ai_msgs if m.content])
-
-    clean_text, options = extract_options(raw_ai_text)
-    new_state["last_options"] = options
-
+    # Extract the AI's response text from the new messages
+    new_messages = new_state.get("messages", [])
+    if len(new_messages) > len(state.get("messages", [])):
+        # Get the last message (which should be the AI's response)
+        last_msg = new_messages[-1]
+        if isinstance(last_msg, AIMessage):
+            full_text = last_msg.content
+            # Extract options and clean text
+            clean_text, options = extract_options(full_text)
+            new_state["last_options"] = options
+        else:
+            clean_text = ""
+    else:
+        clean_text = ""
     return clean_text, new_state
 
 
@@ -681,7 +1818,8 @@ def _init_session():
 
     if "state" not in st.session_state:
         collected_info_init = {cfg["info_type"] for cfg in AGENT_CONFIGS.values()}
-        st.session_state.state = AgentState(
+
+        base_state = AgentState(
             messages=[],
             user_input="",
             collected_info={k: [] for k in collected_info_init},
@@ -689,11 +1827,16 @@ def _init_session():
             agent_index=0,
             exchanges_with_current=0,
             last_agent="",
-            stage_meta={},
+            stage_meta={},  # we'll fill connection_tone inside ensure_tone_block
             last_options=[],
             ad_data=st.session_state.ad_data,
             user_profile={},
         )
+
+        # ✅ make sure connection_tone + emo_tone_type + confirm_tone exist from the start
+        base_state = ensure_tone_block(base_state)
+
+        st.session_state.state = base_state
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -717,11 +1860,11 @@ def main():
     with st.sidebar:
         # Display ad data
         st.header("📢 Ad Context")
-        ad_data = st.session_state.ad_data
-        st.markdown(f"**Campaign:** {ad_data.get('campaign_name', 'N/A')}")
-        st.markdown(f"**Theme:** {ad_data.get('ad_creative_theme', 'N/A')}")
-        st.markdown(f"**Audience:** {ad_data.get('target_audience', 'N/A')}")
-        st.markdown(f"**Source:** {ad_data.get('utm_source', 'N/A')}")
+        ad_data = st.session_state.ad_data or {}
+        st.markdown(f"**Ad Name:** {ad_data.get('ad_name', 'N/A')}")
+        st.markdown(f"**Description:** {ad_data.get('ad_description', 'N/A')}")
+        st.markdown(f"**Theme:** {ad_data.get('ad_theme', 'N/A')}")
+        st.markdown("---")
 
         st.markdown("---")
         st.header("Collected Info")
@@ -733,20 +1876,39 @@ def main():
         st.markdown("---")
         st.header("Conversation Insights")
         meta = st.session_state.state.get("stage_meta", {}) or {}
-        conn_block = meta.get("connection", {}) or {}
-        conn_meta = conn_block.get("metadata", {}) or {}
-        conn_state = conn_block.get("state", {}) or {}
 
-        intent_status = conn_meta.get("confirm_intent") or conn_meta.get("intent_status", "—")
-        intent_type = conn_meta.get("intent_type", "—")
-        emotional_tone = conn_meta.get("emo_tone") or conn_meta.get("emotional_tone", "—")
-        behavioral_signal = conn_meta.get("behavioral_signal", "—")
+        # Intent block (connection_intent)
+        intent_block = meta.get("connection_intent", {}) or {}
+        intent_meta = intent_block.get("metadata", {}) or {}
+        intent_state = intent_block.get("state", {}) or {}
+
+        # Tone block (emotional_tone) - CHECK BOTH emotional_tone AND connection_tone
+        tone_block = meta.get("emotional_tone", {}) or meta.get("connection_tone", {}) or {}
+        tone_meta = tone_block.get("metadata", {}) or {}
+        tone_state = tone_block.get("state", {}) or {}
+
+        # Intent fields (unchanged)
+        intent_status = intent_meta.get("confirm_intent") or intent_meta.get("intent_status", "—")
+        intent_type = intent_meta.get("intent_type", "—")
+
+        #  NEW tone fields
+        confirm_tone = tone_meta.get("confirm_tone") or "unclear"
+        tone_type = tone_meta.get("emo_tone") or tone_meta.get("emo_tone_type") or "—"
+        # New tone theme fields
+        emo_tone_1 = tone_state.get("emo_tone_1") or "—"
+        emo_tone_2 = tone_state.get("emo_tone_2") or "—"
+        emo_tone_3 = tone_state.get("emo_tone_3") or "—"
 
         st.markdown(f"- **Confirm Intent:** {intent_status or '—'}")
         st.markdown(f"- **Intent Type:** {intent_type or '—'}")
-        st.markdown(f"- **Emotional Tone:** {emotional_tone or '—'}")
-        st.markdown(f"- **Behavioral Signal:** {behavioral_signal or '—'}")
-        st.markdown(f"- **STATE:** {json.dumps(conn_state, ensure_ascii=False)}")
+
+        #  NEW tone display
+        st.markdown(f"- **Confirm Tone:** {confirm_tone}")
+        st.markdown(f"- **Tone Type:** {tone_type}")
+
+        # Optional: show separate debug states if you like
+        st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state, ensure_ascii=False)}")
+        st.markdown(f"- **TONE STATE:** {json.dumps(tone_state, ensure_ascii=False)}")
 
         if st.button("Reset conversation"):
             # Clear state and chat history, then rerun app
@@ -772,32 +1934,72 @@ def main():
         with st.chat_message(t["role"]):
             st.markdown(t["content"])
 
-    # Buttons for current options (if any)
-    options = st.session_state.state.get("last_options", []) or []
-    if options and st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
-        with st.chat_message("assistant"):
-            st.write("Choose an option:")
-            cols = st.columns(len(options))
-            for i, opt in enumerate(options):
-                if cols[i].button(opt, key=f"opt_{i}"):
-                    st.session_state.chat_history.append({"role": "user", "content": opt})
-                    ai_text, new_state = process_user_message(
-                        st.session_state.graph, st.session_state.state, opt
-                    )
-                    st.session_state.state = new_state
-                    st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
-                    st.rerun()
+    # ========== CHECK IF CONVERSATION IS COMPLETE ==========
+    stage_meta = st.session_state.state.get("stage_meta", {}) or {}
 
-    # Free-text input
-    prompt = st.chat_input("Type your message...")
-    if prompt:
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        ai_text, new_state = process_user_message(st.session_state.graph, st.session_state.state, prompt)
-        st.session_state.state = new_state
-        st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
-        with st.chat_message("assistant"):
-            st.markdown(ai_text)
-        st.rerun()
+    # Check intent status
+    intent_block = stage_meta.get("connection_intent", {}) or {}
+    intent_meta = intent_block.get("metadata", {}) or {}
+    confirm_intent = intent_meta.get("confirm_intent", "unclear")
+    intent_type = intent_meta.get("intent_type", "")
+
+    # Check emotional tone status - try emotional_tone first, fallback to connection_tone
+    tone_block = stage_meta.get("emotional_tone", {}) or stage_meta.get("connection_tone", {}) or {}
+    tone_meta = tone_block.get("metadata", {}) or {}
+    confirm_tone = tone_meta.get("confirm_tone", "unclear")
+    emo_tone = tone_meta.get("emo_tone", "")
+
+    # Conversation is complete when both are clear
+    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear")
+
+    # ========== SHOW BUTTONS OR COMPLETION MESSAGE ==========
+    if conversation_ended:
+        # Show completion message
+        st.success(f"✅ **Conversation Complete!**")
+        st.info(f"**Intent:** {intent_type} | **Emotional Tone:** {emo_tone}")
+        st.markdown("We've captured your preferences and will tailor your experience accordingly. 🎉")
+    else:
+        # Buttons for current options (only if conversation is ongoing)
+        options = st.session_state.state.get("last_options", []) or []
+        if options and st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
+            with st.chat_message("assistant"):
+                st.write("Choose an option:")
+                cols = st.columns(len(options))
+                for i, opt in enumerate(options):
+                    if cols[i].button(opt, key=f"opt_{i}"):
+                        st.session_state.chat_history.append({"role": "user", "content": opt})
+                        ai_text, new_state = process_user_message(
+                            st.session_state.graph, st.session_state.state, opt
+                        )
+                        st.session_state.state = new_state
+
+                        # Check if conversation just ended
+                        new_stage_meta = new_state.get("stage_meta", {}) or {}
+                        new_intent_meta = new_stage_meta.get("connection_intent", {}).get("metadata", {})
+                        new_tone_meta = new_stage_meta.get("emotional_tone", {}).get("metadata",
+                                                                                     {}) or new_stage_meta.get(
+                            "connection_tone", {}).get("metadata", {})
+                        new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
+                        new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
+
+                        if new_confirm_intent == "clear" and new_confirm_tone == "clear":
+                            # Don't add ai_text to history - we'll show completion message instead
+                            pass
+                        elif ai_text:
+                            st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+
+                        st.rerun()
+
+        # Free-text input (only if conversation is ongoing)
+        prompt = st.chat_input("Type your message...")
+        if prompt:
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            ai_text, new_state = process_user_message(st.session_state.graph, st.session_state.state, prompt)
+            st.session_state.state = new_state
+            st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+            with st.chat_message("assistant"):
+                st.markdown(ai_text)
+            st.rerun()
 
 
 if __name__ == "__main__":
