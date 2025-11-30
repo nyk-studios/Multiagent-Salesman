@@ -18,7 +18,7 @@ try:
 except Exception:
     ChatOpenAI = None
 
-DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "test_try.yaml")
+DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "new_config.yaml")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_OPENAI = bool(OPENAI_API_KEY and ChatOpenAI)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
