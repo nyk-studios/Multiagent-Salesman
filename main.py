@@ -380,6 +380,63 @@ class MotivationResponse(PydanticV1BaseModel):
 
     class Config:
         extra = "forbid"
+# Barriers Response for barriers agent
+class BarriersResponse(PydanticV1BaseModel):
+    """Strict response format for barriers agent only."""
+
+    affirmation: str = PydanticV1Field(
+        ...,  # Required field (no default)
+        description="Warm reflection/validation sentence (1-2 sentences)",
+        min_length=10
+    )
+
+    question_text: str = PydanticV1Field(
+        ...,  # Required field
+        description="First-person question to ask the user about their barriers",
+        min_length=10
+    )
+
+    options: List[str] = PydanticV1Field(
+        ...,  # Required field
+        description="Exactly 4 answer options",
+        min_items=4,
+        max_items=4
+    )
+
+    barriers_mapping: List[str] = PydanticV1Field(
+        ...,  # Required field - NO default!
+        description=(
+            "Exactly 4 barrier categories matching the 4 options. "
+            "Each value must be one of: 'consistency', 'overwhelm', 'time_energy', 'confidence', "
+            "'clarity', 'perfectionism', 'motivation_drop', 'fear_block', 'structure', 'distraction', 'unsure'. "
+            "Example: ['consistency', 'overwhelm', 'clarity', 'unsure']"
+        ),
+        min_items=4,
+        max_items=4
+    )
+
+    class Config:
+        extra = "forbid"
+# Summary Response for summary agent
+class SummaryResponse(PydanticV1BaseModel):
+    """Strict response format for summary agent only."""
+
+    summary_text: str = PydanticV1Field(
+        ...,  # Required field (no default)
+        description="Warm, personalized summary of user's journey (50-150 words)",
+        min_length=50
+    )
+
+    recommendations: List[str] = PydanticV1Field(
+        ...,  # Required field
+        description="2-3 actionable recommendations or next steps",
+        min_items=2,
+        max_items=3
+    )
+
+    class Config:
+        extra = "forbid"
+
 def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: List[str]) -> str:
     """
     Determine which intent the user chose based on their input.
@@ -995,6 +1052,278 @@ def update_motivation_metadata_after_answer(state: AgentState, user_answer: str)
         **state,
         "stage_meta": stage_meta,
     }
+def get_user_chosen_barrier(user_input: str, options: List[str], barriers_mapping: List[str]) -> str:
+    """
+    Determine which barrier the user chose based on their input.
+
+    Args:
+        user_input: The user's answer text
+        options: List of 4 option texts
+        barriers_mapping: List of 4 barrier categories corresponding to options
+
+    Returns:
+        The barrier category the user selected
+    """
+    if not barriers_mapping or len(barriers_mapping) != 4:
+        print(f"WARNING - get_user_chosen_barrier: invalid barriers_mapping: {barriers_mapping}")
+        return "unsure"
+
+    if not options or len(options) != 4:
+        print(f"WARNING - get_user_chosen_barrier: invalid options: {options}")
+        return "unsure"
+
+    user_lower = user_input.lower().strip()
+
+    # Try to match user input to one of the options
+    for i, option in enumerate(options):
+        option_lower = option.lower().strip()
+        # Exact match or significant overlap
+        if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
+            return barriers_mapping[i]
+
+    # Fallback: couldn't determine
+    print(f"WARNING - get_user_chosen_barrier: couldn't match '{user_input}' to options")
+    return "unsure"
+
+def compute_question_direction_barriers(barrier_1: str, barrier_2: str, barrier_3: str,
+                                        current_turn: int) -> str:
+    """
+    Determine if next barrier question should be 'broad' or 'deep'.
+
+    Logic (same as motivation and intent agents):
+    - Turn 1: Always broad (exploring from motivation)
+    - Turn 2: Deep if barrier_1 is clear and not unsure, broad otherwise
+    - Turn 3: Deep if barrier_1 == barrier_2 (consistent), broad if mixed or unsure
+    - Turn 4: Deep if consistent pattern, broad if mixed
+
+    Args:
+        barrier_1: User's barrier from Q1
+        barrier_2: User's barrier from Q2
+        barrier_3: User's barrier from Q3
+        current_turn: The question number we're about to ask (1-4)
+
+    Returns:
+        "broad" or "deep"
+    """
+    if current_turn == 1:
+        return "broad"
+
+    if current_turn == 2:
+        # We have barrier_1 now
+        if barrier_1 in ["unsure", ""]:
+            return "broad"
+        else:
+            return "deep"  # User showed clear barrier in Q1
+
+    if current_turn == 3:
+        # We have barrier_1 and barrier_2
+        if barrier_1 == barrier_2 and barrier_1 not in ["unsure", ""]:
+            return "deep"  # Consistent barrier
+        else:
+            return "broad"  # Mixed or unsure
+
+    if current_turn == 4:
+        # We have barrier_1, barrier_2, and barrier_3
+        # Check for consistency
+        barriers = [barrier_1, barrier_2, barrier_3]
+        # Remove unsure/empty
+        clear_barriers = [b for b in barriers if b and b != "unsure"]
+
+        if len(clear_barriers) >= 2:
+            # Check if at least 2 are the same
+            if clear_barriers[0] == clear_barriers[-1] or (
+                    len(clear_barriers) >= 2 and clear_barriers[0] == clear_barriers[1]):
+                return "deep"
+
+        return "broad"
+
+    return "broad"  # Fallback
+
+def compute_final_barrier(barrier_1: str, barrier_2: str, barrier_3: str, barrier_4: str,
+                         motivation_type: str) -> str:
+    """
+    Determine the final barrier from 4 answers.
+
+    Logic:
+    1. If 2+ answers are "unsure" → "unsure"
+    2. If same barrier appears 2+ times → that barrier
+    3. If tie (2 barriers with 2 votes each) → use most recent
+    4. If all different → "mixed"
+
+    Args:
+        barrier_1: Barrier from Q1
+        barrier_2: Barrier from Q2
+        barrier_3: Barrier from Q3
+        barrier_4: Barrier from Q4
+        motivation_type: User's motivation (used as tiebreaker if needed)
+
+    Returns:
+        Final barrier category
+    """
+    # Normalize inputs
+    barriers = [
+        (barrier_1 or "").lower().strip(),
+        (barrier_2 or "").lower().strip(),
+        (barrier_3 or "").lower().strip(),
+        (barrier_4 or "").lower().strip()
+    ]
+
+    # If any are missing, return unsure
+    if not all(barriers):
+        return "unsure"
+
+    # RULE 1: If 2+ answers are "unsure" → "unsure"
+    unsure_count = sum(1 for b in barriers if b == "unsure")
+    if unsure_count >= 2:
+        return "unsure"
+
+    # RULE 2: Count occurrences (similar to intent/motivation logic)
+    from collections import Counter
+
+    # Filter out empty and unsure
+    filtered = [b for b in barriers if b and b != "unsure"]
+
+    if not filtered:
+        return "unsure"
+
+    counts = Counter(filtered)
+    max_count = max(counts.values())
+
+    # If we have a clear winner (appears 2+ times)
+    if max_count >= 2:
+        candidates = [b for b, c in counts.items() if c == max_count]
+
+        # Tiebreaker: prefer most recent
+        # Priority order: barrier_4 > barrier_3 > barrier_2 > barrier_1
+        priority_order = [barriers[3], barriers[2], barriers[1], barriers[0]]
+        for p in priority_order:
+            if p in candidates:
+                return p
+
+        # Fallback
+        return candidates[0]
+
+    # RULE 3: All different → "mixed"
+    return "mixed"
+
+def should_finalize_barriers(barrier_1: str, barrier_2: str, barrier_3: str, barrier_4: str,
+                            motivation_type: str) -> Tuple[bool, str]:
+    """
+    Determine if barriers assessment is complete and what the final barrier is.
+
+    Args:
+        barrier_1: User's barrier from Q1
+        barrier_2: User's barrier from Q2
+        barrier_3: User's barrier from Q3
+        barrier_4: User's barrier from Q4
+        motivation_type: User's motivation type (for tiebreaker)
+
+    Returns:
+        Tuple of (should_finalize, final_barrier)
+        - should_finalize: True if we have 4 answers
+        - final_barrier: The determined barrier type
+    """
+    # Need all 4 answers to finalize
+    if not barrier_4 or barrier_4 == "":
+        return (False, "")
+
+    # We have 4 answers, time to finalize
+    # Call the logic function to determine final barrier
+    final_barrier = compute_final_barrier(barrier_1, barrier_2, barrier_3, barrier_4, motivation_type)
+
+    return (True, final_barrier)
+def update_barriers_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+    """
+    Update barriers metadata after user answers, BEFORE the agent runs again.
+
+    This function:
+    1. Classifies the user's answer using stored barriers_mapping
+    2. Updates barrier_1, barrier_2, barrier_3, or barrier_4 based on current turn
+    3. Updates last_barrier to most recent answer
+    4. Checks if barriers should be finalized
+    5. Updates confirm_barriers and barrier_type
+    """
+    import copy
+
+    # Deep copy to avoid mutations
+    stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
+    barriers_block = stage_meta.get("barriers", {}) or {}
+    barriers_state = dict(barriers_block.get("state", {}) or {})
+    barriers_meta = dict(barriers_block.get("metadata", {}) or {})
+
+    # Get stored mapping from previous agent run
+    prev_barriers_mapping = barriers_state.get("barriers_mapping", [])
+    prev_options = barriers_state.get("options", [])
+
+    # Get current turn (which question did they just answer?)
+    current_turn = barriers_state.get("turn", 0)
+
+    # Only process if we have a mapping and the user actually answered
+    if not prev_barriers_mapping or not user_answer:
+        return state
+
+    # Classify the user's answer
+    chosen_barrier = get_user_chosen_barrier(user_answer, prev_options, prev_barriers_mapping)
+
+    print(
+        f"DEBUG - update_barriers_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_barrier='{chosen_barrier}'")
+
+    # Update barrier based on which question they just answered
+    if current_turn == 1:
+        # They just answered Q1
+        barriers_state["barrier_1"] = chosen_barrier
+        barriers_state["last_barrier"] = chosen_barrier
+    elif current_turn == 2:
+        # They just answered Q2
+        barriers_state["barrier_2"] = chosen_barrier
+        barriers_state["last_barrier"] = chosen_barrier
+    elif current_turn == 3:
+        # They just answered Q3
+        barriers_state["barrier_3"] = chosen_barrier
+        barriers_state["last_barrier"] = chosen_barrier
+    elif current_turn == 4:
+        # They just answered Q4
+        barriers_state["barrier_4"] = chosen_barrier
+        barriers_state["last_barrier"] = chosen_barrier
+
+    # Get all four barriers
+    barrier_1 = barriers_state.get("barrier_1", "")
+    barrier_2 = barriers_state.get("barrier_2", "")
+    barrier_3 = barriers_state.get("barrier_3", "")
+    barrier_4 = barriers_state.get("barrier_4", "")
+
+    # Get motivation_type for finalization logic
+    motivation_block = stage_meta.get("motivation", {}) or {}
+    motivation_meta = motivation_block.get("metadata", {}) or {}
+    motivation_type = motivation_meta.get("motivation_type", "")
+
+    # Check if we should finalize (after 4 questions)
+    should_finalize, final_barrier = should_finalize_barriers(
+        barrier_1, barrier_2, barrier_3, barrier_4, motivation_type
+    )
+
+    print(f"DEBUG - should_finalize={should_finalize}, final_barrier='{final_barrier}'")
+
+    if should_finalize:
+        # We're done with barriers questions
+        barriers_meta["confirm_barriers"] = "clear"
+        barriers_meta["barrier_type"] = final_barrier
+    else:
+        # Keep asking questions
+        barriers_meta["confirm_barriers"] = "unclear"
+        barriers_meta["barrier_type"] = ""
+
+    # Write back the updated metadata and state
+    stage_meta["barriers"] = {
+        "metadata": barriers_meta,
+        "state": barriers_state,
+    }
+
+    return {
+        **state,
+        "stage_meta": stage_meta,
+    }
+
 def merge_stage_meta(left: Optional[Dict], right: Optional[Dict]) -> Dict:
     """Deep merge stage_meta dictionaries"""
     import copy
@@ -1241,6 +1570,91 @@ class BaseAgent(ABC):
             ctx["last_motivation"] = last_motivation
             ctx["question_direction"] = question_direction
 
+            # FOR BARRIERS AGENT: compute last_barrier and question_direction
+        if self.info_type == "barriers":
+            stage_meta = state.get("stage_meta", {}) or {}
+
+            # Get the finalized motivation from motivation agent
+            motivation_block = stage_meta.get("motivation", {}) or {}
+            motivation_meta = motivation_block.get("metadata", {}) or {}
+            motivation_type = motivation_meta.get("motivation_type", "")
+
+            # Get barriers state
+            barriers_block = stage_meta.get("barriers", {}) or {}
+            barriers_state = barriers_block.get("state", {}) or {}
+
+            current_turn = barriers_state.get("turn", 0)
+
+            barrier_1 = barriers_state.get("barrier_1", "")
+            barrier_2 = barriers_state.get("barrier_2", "")
+            barrier_3 = barriers_state.get("barrier_3", "")
+            last_barrier_state = barriers_state.get("last_barrier", "")
+
+            # Determine last_barrier
+            if current_turn == 0:
+                # First turn - use motivation_type from motivation agent
+                last_barrier = motivation_type if motivation_type else ""
+            else:
+                # Use last_barrier if available, otherwise motivation_type
+                last_barrier = last_barrier_state if last_barrier_state else motivation_type
+
+            # Compute question_direction
+            question_direction = compute_question_direction_barriers(
+                barrier_1, barrier_2, barrier_3, current_turn + 1
+            )
+
+            ctx["last_barrier"] = last_barrier
+            ctx["question_direction"] = question_direction
+            # FOR SUMMARY AGENT: gather all insights from all 4 agents
+        if self.info_type == "summary":
+            print("DEBUG - Summary agent building context")
+            stage_meta = state.get("stage_meta", {}) or {}
+            print(f"DEBUG - stage_meta keys: {list(stage_meta.keys())}")
+            # Get intent data
+            intent_block = stage_meta.get("connection_intent", {}) or {}
+            intent_meta = intent_block.get("metadata", {}) or {}
+            intent_state = intent_block.get("state", {}) or {}
+
+            # Get tone data
+            tone_block = stage_meta.get("emotional_tone", {}) or {}
+            tone_meta = tone_block.get("metadata", {}) or {}
+            tone_state = tone_block.get("state", {}) or {}
+
+            # Get motivation data
+            motivation_block = stage_meta.get("motivation", {}) or {}
+            motivation_meta = motivation_block.get("metadata", {}) or {}
+            motivation_state = motivation_block.get("state", {}) or {}
+
+            # Get barriers data
+            barriers_block = stage_meta.get("barriers", {}) or {}
+            barriers_meta = barriers_block.get("metadata", {}) or {}
+            barriers_state = barriers_block.get("state", {}) or {}
+
+            # Add intent data to context
+            ctx["intent_type"] = intent_meta.get("intent_type", "")
+            ctx["theme_1"] = intent_state.get("theme_1", "")
+            ctx["theme_2"] = intent_state.get("theme_2", "")
+            ctx["theme_3"] = intent_state.get("theme_3", "")
+
+            # Add tone data to context
+            ctx["emo_tone"] = tone_meta.get("emo_tone", "")
+            ctx["emo_tone_1"] = tone_state.get("emo_tone_1", "")
+            ctx["emo_tone_2"] = tone_state.get("emo_tone_2", "")
+
+            # Add motivation data to context
+            ctx["motivation_type"] = motivation_meta.get("motivation_type", "")
+            ctx["motivation_1"] = motivation_state.get("motivation_1", "")
+            ctx["motivation_2"] = motivation_state.get("motivation_2", "")
+            ctx["motivation_3"] = motivation_state.get("motivation_3", "")
+            ctx["motivation_4"] = motivation_state.get("motivation_4", "")
+
+            # Add barriers data to context
+            ctx["barrier_type"] = barriers_meta.get("barrier_type", "")
+            ctx["barrier_1"] = barriers_state.get("barrier_1", "")
+            ctx["barrier_2"] = barriers_state.get("barrier_2", "")
+            ctx["barrier_3"] = barriers_state.get("barrier_3", "")
+            ctx["barrier_4"] = barriers_state.get("barrier_4", "")
+
         return ctx
 
     def prepare_messages(self, ctx: Dict[str, str], state: AgentState) -> List[BaseMessage]:
@@ -1258,6 +1672,7 @@ class BaseAgent(ABC):
             return AgentResponse(
                 question_text=mock_text,
                 options=[],
+                intent_mapping=["", "", "", ""],
                 metadata={},
                 state={},
             )
@@ -1311,6 +1726,35 @@ class BaseAgent(ABC):
                     metadata={},
                     state={}
                 )
+            # Use strict schema for barriers agent
+            elif self.info_type == "barriers":
+                structured_llm = llm.with_structured_output(BarriersResponse)
+                strict_response: BarriersResponse = structured_llm.invoke(msgs)
+                # Convert to AgentResponse format
+                response = AgentResponse(
+                    affirmation=strict_response.affirmation,
+                    question_text=strict_response.question_text,
+                    options=strict_response.options,
+                    intent_mapping=strict_response.barriers_mapping,  # Map barriers_mapping to intent_mapping
+                    metadata={},
+                    state={}
+                )
+            # Use strict schema for summary agent
+            elif self.info_type == "summary":
+                structured_llm = llm.with_structured_output(SummaryResponse)
+                strict_response: SummaryResponse = structured_llm.invoke(msgs)
+                # Convert to AgentResponse format with summary data stored in metadata
+                response = AgentResponse(
+                    question_text=strict_response.summary_text,
+                    options=[],
+                    intent_mapping=["", "", "", ""],  # Required field with 4 items
+                    metadata={
+                        "summary_text": strict_response.summary_text,
+                        "recommendations": strict_response.recommendations
+                    },
+                    state={}
+                )
+
             else:
                 # Use flexible schema for other agents
                 structured_llm = llm.with_structured_output(AgentResponse)
@@ -1368,12 +1812,49 @@ class BaseAgent(ABC):
                     metadata={"error": str(e)},
                     state={},
                 )
+            # Return a proper fallback response for barriers agent
+            elif self.info_type == "barriers":
+                return AgentResponse(
+                    affirmation="It's important to understand what might be in your way.",
+                    question_text="When I think about what stops me from moving forward, I notice...",
+                    options=[
+                        "Struggling to stay consistent",
+                        "Feeling overwhelmed by everything",
+                        "Not having enough time or energy",
+                        "I'm still figuring it out"
+                    ],
+                    intent_mapping=["consistency", "overwhelm", "time_energy", "unsure"],
+                    metadata={"error": str(e)},
+                    state={},
+                )
+            # Return a proper fallback response for summary agent
+            elif self.info_type == "summary":
+                fallback_summary_text = "Thank you for sharing your journey with me. I've captured your insights and I'm here to support you."
+                fallback_recommendations = [
+                    "Take one small step today toward your goal",
+                    "Reflect on what you've learned about yourself",
+                    "Reach out for support when you need it"
+                ]
+
+                return AgentResponse(
+                    question_text=fallback_summary_text,
+                    options=[],
+                    intent_mapping=["", "", "", ""],
+                    metadata={
+                        "error": str(e),
+                        "summary_text": fallback_summary_text,
+                        "recommendations": fallback_recommendations
+                    },
+                    state={},
+                )
+
             else:
                 # Fallback for other agents
                 mock_text = self.get_mock_response(user_text, state)
                 return AgentResponse(
                     question_text=mock_text,
                     options=[],
+                    intent_mapping=["", "", "", ""],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1553,6 +2034,80 @@ class BaseAgent(ABC):
             new_meta.setdefault("confirm_motivation", "unclear")
             new_meta.setdefault("motivation_type", "")
             new_state.setdefault("last_motivation", "")
+
+            stage_meta_prev[self.info_type] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+            # ---------- HARD TURN / LEVEL / METADATA LOGIC FOR BARRIERS ----------
+        if self.info_type == "barriers":
+            # Get current turn from old_state
+            old_turn = old_state.get("turn", 0)
+            try:
+                old_turn = int(old_turn)
+            except (TypeError, ValueError):
+                old_turn = 0
+
+            # Increment turn
+            current_turn = old_turn + 1
+            new_state["turn"] = current_turn
+
+            # Initialize fields on turn 1
+            if current_turn == 1:
+                ad_data = state.get("ad_data", {}) or {}
+                ad_theme = ad_data.get("ad_theme", "")
+                new_state["ad_theme"] = ad_theme
+                new_state["barrier_1"] = ""
+                new_state["barrier_2"] = ""
+                new_state["barrier_3"] = ""
+                new_state["barrier_4"] = ""
+                new_state["last_barrier"] = ""  # Will be set after first answer
+
+            # Set level based on turn
+            if current_turn == 1:
+                new_state["last_level"] = "L1"
+            elif current_turn == 2:
+                new_state["last_level"] = "L2"
+            elif current_turn == 3:
+                new_state["last_level"] = "L3"
+            elif current_turn == 4:
+                new_state["last_level"] = "L4"
+            else:
+                new_state["last_level"] = "L5"
+
+            # Store barriers_mapping and options from LLM response
+            if response.intent_mapping:  # barriers_mapping was mapped to intent_mapping
+                new_state["barriers_mapping"] = response.intent_mapping
+            if response.options:
+                new_state["options"] = response.options
+
+            # Keep metadata fields (these will be updated by update_barriers_metadata_after_answer)
+            new_meta.setdefault("confirm_barriers", "unclear")
+            new_meta.setdefault("barrier_type", "")
+            new_state.setdefault("last_barrier", "")
+
+            stage_meta_prev[self.info_type] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+            # ---------- SUMMARY AGENT LOGIC ----------
+        # ---------- SUMMARY AGENT LOGIC ----------
+        if self.info_type == "summary":
+            # Summary runs only once (turn = 1)
+            new_state["turn"] = 1
+
+            # Immediately mark as complete
+            new_meta["confirm_summary"] = "clear"
+            # Store summary_text and recommendations from response
+            # Check if it's in metadata (fallback case) or as attributes (success case)
+            if hasattr(response, 'summary_text'):
+                new_meta["summary_text"] = response.summary_text
+                new_meta["recommendations"] = response.recommendations
+            else:
+                # Fallback: get from metadata
+                new_meta["summary_text"] = response.metadata.get("summary_text", "")
+                new_meta["recommendations"] = response.metadata.get("recommendations", [])
+
 
             stage_meta_prev[self.info_type] = {
                 "metadata": new_meta,
@@ -2012,6 +2567,26 @@ class Supervisor:
         motivation_4 = motivation_state.get("motivation_4", "")
         motivation_type = motivation_meta.get("motivation_type", "unclear")
 
+        # Extract barriers info
+        barriers_block = stage_meta.get("barriers", {}) or {}
+        barriers_meta = barriers_block.get("metadata", {}) or {}
+        barriers_state = barriers_block.get("state", {}) or {}
+
+        confirm_barriers = barriers_meta.get("confirm_barriers", "unclear")
+        barriers_turn = barriers_state.get("turn", 0)
+        barrier_1 = barriers_state.get("barrier_1", "")
+        barrier_2 = barriers_state.get("barrier_2", "")
+        barrier_3 = barriers_state.get("barrier_3", "")
+        barrier_4 = barriers_state.get("barrier_4", "")
+        barrier_type = barriers_meta.get("barrier_type", "unclear")
+
+        # Extract summary info
+        summary_block = stage_meta.get("summary", {}) or {}
+        summary_meta = summary_block.get("metadata", {}) or {}
+
+        confirm_summary = summary_meta.get("confirm_summary", "unclear")
+        summary_turn = summary_meta.get("turn", 0)
+
         return {
             # Raw JSON (for reference if supervisor needs full context)
             "stage_meta": json.dumps(stage_meta, ensure_ascii=False),
@@ -2041,6 +2616,20 @@ class Supervisor:
             "motivation_3": motivation_3,
             "motivation_4": motivation_4,
             "motivation_type": motivation_type,
+
+            # Barriers variables
+            "confirm_barriers": confirm_barriers,
+            "barriers_turn": str(barriers_turn),
+            "barrier_1": barrier_1,
+            "barrier_2": barrier_2,
+            "barrier_3": barrier_3,
+            "barrier_4": barrier_4,
+            "barrier_type": barrier_type,
+
+            # Summary variables
+            "confirm_summary": confirm_summary,
+            "summary_turn": str(summary_turn),
+
         }
 
 
@@ -2248,7 +2837,11 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
         state = update_motivation_metadata_after_answer(state, msg)
         print(
             f"DEBUG - After motivation metadata update: confirm_motivation={state.get('stage_meta', {}).get('motivation', {}).get('metadata', {}).get('confirm_motivation')}")
-
+        # Update barriers metadata if user answered a barriers question
+    if last_agent == "barriers" and msg:
+        state = update_barriers_metadata_after_answer(state, msg)
+        print(
+            f"DEBUG - After barriers metadata update: confirm_barriers={state.get('stage_meta', {}).get('barriers', {}).get('metadata', {}).get('confirm_barriers')}")
     new_state = graph.invoke(state)
     # Extract the AI's response text from the new messages
     new_messages = new_state.get("messages", [])
@@ -2354,6 +2947,11 @@ def main():
         motivation_meta = motivation_block.get("metadata", {}) or {}
         motivation_state = motivation_block.get("state", {}) or {}
 
+        # Barriers block
+        barriers_block = meta.get("barriers", {}) or {}
+        barriers_meta = barriers_block.get("metadata", {}) or {}
+        barriers_state = barriers_block.get("state", {}) or {}
+
         # Intent fields
         intent_status = intent_meta.get("confirm_intent") or intent_meta.get("intent_status", "—")
         intent_type = intent_meta.get("intent_type", "—")
@@ -2373,6 +2971,14 @@ def main():
         motivation_3 = motivation_state.get("motivation_3") or "—"
         motivation_4 = motivation_state.get("motivation_4") or "—"
 
+        # Barriers fields
+        confirm_barriers = barriers_meta.get("confirm_barriers") or "unclear"
+        barrier_type = barriers_meta.get("barrier_type", "—")
+        barrier_1 = barriers_state.get("barrier_1") or "—"
+        barrier_2 = barriers_state.get("barrier_2") or "—"
+        barrier_3 = barriers_state.get("barrier_3") or "—"
+        barrier_4 = barriers_state.get("barrier_4") or "—"
+
         # Display insights
         st.markdown(f"- **Confirm Intent:** {intent_status or '—'}")
         st.markdown(f"- **Intent Type:** {intent_type or '—'}")
@@ -2383,7 +2989,16 @@ def main():
         st.markdown(f"- **Confirm Motivation:** {confirm_motivation}")
         st.markdown(f"- **Motivation Type:** {motivation_type}")
 
-        # Optional: show separate debug states
+        st.markdown(f"- **Confirm Barriers:** {confirm_barriers}")
+        st.markdown(f"- **Barrier Type:** {barrier_type}")
+        # Summary block
+        summary_block = meta.get("summary", {}) or {}
+        summary_meta = summary_block.get("metadata", {}) or {}
+
+        # Summary fields
+        confirm_summary = summary_meta.get("confirm_summary") or "unclear"
+
+        st.markdown(f"- **Confirm Summary:** {confirm_summary}")
         # Optional: show separate debug states
         st.markdown("---")
         st.markdown("**Debug States:**")
@@ -2392,12 +3007,11 @@ def main():
         intent_state_clean = {k: v for k, v in intent_state.items() if k not in ['intent_mapping', 'options']}
         st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state_clean, ensure_ascii=False)}")
 
-        # TONE STATE
         # TONE STATE - Remove emotional_mapping and options
         tone_state_clean = {k: v for k, v in tone_state.items() if k not in ['emotional_mapping', 'options']}
         st.markdown(f"- **TONE STATE:** {json.dumps(tone_state_clean, ensure_ascii=False)}")
 
-        # MOTIVATION STATE - Add individual answers
+        # MOTIVATION STATE - Remove motivation_mapping and options
         motivation_state_clean = {k: v for k, v in motivation_state.items() if
                                   k not in ['motivation_mapping', 'options']}
         st.markdown(f"- **MOTIVATION STATE:** {json.dumps(motivation_state_clean, ensure_ascii=False)}")
@@ -2413,6 +3027,22 @@ def main():
                 st.markdown(f"  - Motivation 3: {motivation_3}")
             if motivation_4 != "—":
                 st.markdown(f"  - Motivation 4: {motivation_4}")
+
+        # BARRIERS STATE - Remove barriers_mapping and options
+        barriers_state_clean = {k: v for k, v in barriers_state.items() if k not in ['barriers_mapping', 'options']}
+        st.markdown(f"- **BARRIERS STATE:** {json.dumps(barriers_state_clean, ensure_ascii=False)}")
+
+        # Show individual barrier answers clearly
+        if any([barrier_1 != "—", barrier_2 != "—", barrier_3 != "—", barrier_4 != "—"]):
+            st.markdown("**Barrier Answers:**")
+            if barrier_1 != "—":
+                st.markdown(f"  - Barrier 1: {barrier_1}")
+            if barrier_2 != "—":
+                st.markdown(f"  - Barrier 2: {barrier_2}")
+            if barrier_3 != "—":
+                st.markdown(f"  - Barrier 3: {barrier_3}")
+            if barrier_4 != "—":
+                st.markdown(f"  - Barrier 4: {barrier_4}")
 
         if st.button("Reset conversation"):
             # Clear state and chat history, then rerun app
@@ -2453,17 +3083,50 @@ def main():
     confirm_tone = tone_meta.get("confirm_tone", "unclear")
     emo_tone = tone_meta.get("emo_tone", "")
 
-    # Conversation is complete when both are clear
+    # Check motivation status
     motivation_block = stage_meta.get("motivation", {}) or {}
     motivation_meta = motivation_block.get("metadata", {}) or {}
     confirm_motivation = motivation_meta.get("confirm_motivation", "unclear")
-    # Conversation is complete when ALL THREE are clear
-    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear" and confirm_motivation == "clear")
+    motivation_type = motivation_meta.get("motivation_type", "")
+
+    # Check barriers status
+    barriers_block = stage_meta.get("barriers", {}) or {}
+    barriers_meta = barriers_block.get("metadata", {}) or {}
+    confirm_barriers = barriers_meta.get("confirm_barriers", "unclear")
+    barrier_type = barriers_meta.get("barrier_type", "")
+
+    # Conversation is complete when all four are clear
+    # Check summary status
+    summary_block = stage_meta.get("summary", {}) or {}
+    summary_meta = summary_block.get("metadata", {}) or {}
+    confirm_summary = summary_meta.get("confirm_summary", "unclear")
+    summary_text = summary_meta.get("summary_text", "")
+    recommendations = summary_meta.get("recommendations", [])
+
+    # Conversation is complete when all FIVE are clear (including summary)
+    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear" and
+                          confirm_motivation == "clear" and confirm_barriers == "clear" and
+                          confirm_summary == "clear")
+
     # ========== SHOW BUTTONS OR COMPLETION MESSAGE ==========
     if conversation_ended:
         # Show completion message
         st.success(f"✅ **Conversation Complete!**")
-        st.info(f"**Intent:** {intent_type} | **Emotional Tone:** {emo_tone}")
+        st.info(
+            f"**Intent:** {intent_type} | **Emotional Tone:** {emo_tone} | **Motivation:** {motivation_type} | **Barrier:** {barrier_type}")
+
+        # Show summary if available
+        if summary_text:
+            st.markdown("### 📋 Your Personalized Summary")
+            st.markdown(summary_text)
+
+        # Show recommendations if available
+        if recommendations:
+            st.markdown("### 💡 Next Steps")
+            for i, rec in enumerate(recommendations, 1):
+                st.markdown(f"{i}. {rec}")
+
+        st.markdown("---")
         st.markdown("We've captured your preferences and will tailor your experience accordingly. 🎉")
     else:
         # Buttons for current options (only if conversation is ongoing)
@@ -2486,14 +3149,17 @@ def main():
                         new_tone_meta = new_stage_meta.get("emotional_tone", {}).get("metadata",
                                                                                      {}) or new_stage_meta.get(
                             "connection_tone", {}).get("metadata", {})
+                        new_motivation_meta = new_stage_meta.get("motivation", {}).get("metadata", {})
+                        new_barriers_meta = new_stage_meta.get("barriers", {}).get("metadata", {})
+
                         new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
                         new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
+                        new_confirm_motivation = new_motivation_meta.get("confirm_motivation", "unclear")
+                        new_confirm_barriers = new_barriers_meta.get("confirm_barriers", "unclear")
 
-                        # Check if conversation is complete (all 3 agents done)
-                        new_confirm_motivation = new_stage_meta.get("motivation", {}).get("metadata", {}).get(
-                            "confirm_motivation", "unclear")
-
-                        if new_confirm_intent == "clear" and new_confirm_tone == "clear" and new_confirm_motivation == "clear":
+                        # Check if conversation is complete (all 4 agents done)
+                        if (new_confirm_intent == "clear" and new_confirm_tone == "clear" and
+                                new_confirm_motivation == "clear" and new_confirm_barriers == "clear"):
                             # Don't add ai_text to history - we'll show completion message instead
                             pass
                         elif ai_text:
@@ -2511,7 +3177,6 @@ def main():
             with st.chat_message("assistant"):
                 st.markdown(ai_text)
             st.rerun()
-
 
 if __name__ == "__main__":
     main()
