@@ -12,6 +12,16 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 import random
+#from langchain_core.pydantic_v1 import BaseModel as PydanticV1BaseModel, Field as PydanticV1Field
+
+
+try:
+    from langchain_core.pydantic_v1 import BaseModel as PydanticV1BaseModel, Field as PydanticV1Field
+    print("✅ Successfully imported from langchain_core.pydantic_v1")
+except ImportError as e:
+    print(f"❌ Failed to import from langchain_core.pydantic_v1: {e}")
+    from pydantic.v1 import BaseModel as PydanticV1BaseModel, Field as PydanticV1Field
+    print("✅ Successfully imported from pydantic.v1")
 
 try:
     from langchain_openai import ChatOpenAI
@@ -37,7 +47,7 @@ else:
 AGENT_CONFIGS: Dict[str, Dict[str, Any]] = _raw_cfg.get("agents", {})
 SUPERVISOR_PROMPTS: Dict[str, str] = _raw_cfg.get("supervisor", {})
 
-from langchain_core.pydantic_v1 import BaseModel as PydanticV1BaseModel, Field as PydanticV1Field
+
 
 
 # ============================================================================
@@ -334,7 +344,42 @@ class EmotionalToneResponse(PydanticV1BaseModel):
 
     class Config:
         extra = "forbid"
+# Motivation Response for motivation agent
+class MotivationResponse(PydanticV1BaseModel):
+    """Strict response format for motivation agent only."""
 
+    affirmation: str = PydanticV1Field(
+        ...,  # Required field (no default)
+        description="Warm reflection/validation sentence (1-2 sentences)",
+        min_length=10
+    )
+
+    question_text: str = PydanticV1Field(
+        ...,  # Required field
+        description="First-person question to ask the user about their motivation",
+        min_length=10
+    )
+
+    options: List[str] = PydanticV1Field(
+        ...,  # Required field
+        description="Exactly 4 answer options",
+        min_items=4,
+        max_items=4
+    )
+
+    motivation_mapping: List[str] = PydanticV1Field(
+        ...,  # Required field - NO default!
+        description=(
+            "Exactly 4 motivation categories matching the 4 options. "
+            "Each value must be one of: 'progress', 'identity', 'relief', 'play', 'belonging', 'achievement', 'autonomy', 'expression', 'unsure'. "
+            "Example: ['progress', 'achievement', 'belonging', 'unsure']"
+        ),
+        min_items=4,
+        max_items=4
+    )
+
+    class Config:
+        extra = "forbid"
 def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: List[str]) -> str:
     """
     Determine which intent the user chose based on their input.
@@ -675,7 +720,281 @@ def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: 
         **state,
         "stage_meta": stage_meta,
     }
+def get_user_chosen_motivation(user_input: str, options: List[str], motivation_mapping: List[str]) -> str:
+    """
+    Determine which motivation the user chose based on their input.
 
+    Args:
+        user_input: The user's answer text
+        options: List of 4 option texts
+        motivation_mapping: List of 4 motivation categories corresponding to options
+
+    Returns:
+        The motivation category the user selected
+    """
+    if not motivation_mapping or len(motivation_mapping) != 4:
+        print(f"WARNING - get_user_chosen_motivation: invalid motivation_mapping: {motivation_mapping}")
+        return "unsure"
+
+    if not options or len(options) != 4:
+        print(f"WARNING - get_user_chosen_motivation: invalid options: {options}")
+        return "unsure"
+
+    user_lower = user_input.lower().strip()
+
+    # Try to match user input to one of the options
+    for i, option in enumerate(options):
+        option_lower = option.lower().strip()
+        # Exact match or significant overlap
+        if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
+            return motivation_mapping[i]
+
+    # Fallback: couldn't determine
+    print(f"WARNING - get_user_chosen_motivation: couldn't match '{user_input}' to options")
+    return "unsure"
+
+
+def compute_question_direction_motivation(motivation_1: str, motivation_2: str, motivation_3: str,
+                                          current_turn: int) -> str:
+    """
+    Determine if next motivation question should be 'broad' or 'deep'.
+
+    Logic (same as intent agent):
+    - Turn 1: Always broad (exploring from intent)
+    - Turn 2: Deep if motivation_1 is clear and not unsure, broad otherwise
+    - Turn 3: Deep if motivation_1 == motivation_2 (consistent), broad if mixed or unsure
+    - Turn 4: Deep if consistent pattern, broad if mixed
+
+    Args:
+        motivation_1: User's motivation from Q1
+        motivation_2: User's motivation from Q2
+        motivation_3: User's motivation from Q3
+        current_turn: The question number we're about to ask (1-4)
+
+    Returns:
+        "broad" or "deep"
+    """
+    if current_turn == 1:
+        return "broad"
+
+    if current_turn == 2:
+        # We have motivation_1 now
+        if motivation_1 in ["unsure", ""]:
+            return "broad"
+        else:
+            return "deep"  # User showed clear motivation in Q1
+
+    if current_turn == 3:
+        # We have motivation_1 and motivation_2
+        if motivation_1 == motivation_2 and motivation_1 not in ["unsure", ""]:
+            return "deep"  # Consistent motivation
+        else:
+            return "broad"  # Mixed or unsure
+
+    if current_turn == 4:
+        # We have motivation_1, motivation_2, and motivation_3
+        # Check for consistency
+        motivations = [motivation_1, motivation_2, motivation_3]
+        # Remove unsure/empty
+        clear_motivations = [m for m in motivations if m and m != "unsure"]
+
+        if len(clear_motivations) >= 2:
+            # Check if at least 2 are the same
+            if clear_motivations[0] == clear_motivations[-1] or (
+                    len(clear_motivations) >= 2 and clear_motivations[0] == clear_motivations[1]):
+                return "deep"
+
+        return "broad"
+
+    return "broad"  # Fallback
+
+
+def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3: str, motivation_4: str,
+                             intent_type: str) -> str:
+    """
+    Determine the final motivation from 4 answers.
+
+    Logic:
+    1. If 2+ answers are "unsure" → "unsure"
+    2. If same motivation appears 2+ times → that motivation
+    3. If tie (2 motivations with 2 votes each) → use most recent
+    4. If all different → "mixed"
+
+    Args:
+        motivation_1: Motivation from Q1
+        motivation_2: Motivation from Q2
+        motivation_3: Motivation from Q3
+        motivation_4: Motivation from Q4
+        intent_type: User's intent (used as tiebreaker if needed)
+
+    Returns:
+        Final motivation category
+    """
+    # Normalize inputs
+    motivations = [
+        (motivation_1 or "").lower().strip(),
+        (motivation_2 or "").lower().strip(),
+        (motivation_3 or "").lower().strip(),
+        (motivation_4 or "").lower().strip()
+    ]
+
+    # If any are missing, return unsure
+    if not all(motivations):
+        return "unsure"
+
+    # RULE 1: If 2+ answers are "unsure" → "unsure"
+    unsure_count = sum(1 for m in motivations if m == "unsure")
+    if unsure_count >= 2:
+        return "unsure"
+
+    # RULE 2: Count occurrences (similar to intent logic)
+    from collections import Counter
+
+    # Include intent_type as a tiebreaker option
+    all_values = motivations + [intent_type.lower().strip()] if intent_type else motivations
+
+    # Filter out empty and unsure
+    filtered = [m for m in motivations if m and m != "unsure"]
+
+    if not filtered:
+        return "unsure"
+
+    counts = Counter(filtered)
+    max_count = max(counts.values())
+
+    # If we have a clear winner (appears 2+ times)
+    if max_count >= 2:
+        candidates = [m for m, c in counts.items() if c == max_count]
+
+        # Tiebreaker: prefer most recent
+        # Priority order: motivation_4 > motivation_3 > motivation_2 > motivation_1
+        priority_order = [motivations[3], motivations[2], motivations[1], motivations[0]]
+        for p in priority_order:
+            if p in candidates:
+                return p
+
+        # Fallback
+        return candidates[0]
+
+    # RULE 3: All different → "mixed"
+    return "mixed"
+def should_finalize_motivation(motivation_1: str, motivation_2: str, motivation_3: str, motivation_4: str, intent_type: str) -> Tuple[bool, str]:
+    """
+    Determine if motivation assessment is complete and what the final motivation is.
+
+    Args:
+        motivation_1: User's motivation from Q1
+        motivation_2: User's motivation from Q2
+        motivation_3: User's motivation from Q3
+        motivation_4: User's motivation from Q4
+        intent_type: User's intent type (for tiebreaker)
+
+    Returns:
+        Tuple of (should_finalize, final_motivation)
+        - should_finalize: True if we have 4 answers
+        - final_motivation: The determined motivation type
+    """
+    # Need all 4 answers to finalize
+    if not motivation_4 or motivation_4 == "":
+        return (False, "")
+
+    # We have 4 answers, time to finalize
+    # Call the logic function to determine final motivation
+    final_motivation = compute_final_motivation(motivation_1, motivation_2, motivation_3, motivation_4, intent_type)
+
+    return (True, final_motivation)
+
+def update_motivation_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+    """
+    Update motivation metadata after user answers, BEFORE the agent runs again.
+
+    This function:
+    1. Classifies the user's answer using stored motivation_mapping
+    2. Updates motivation_1, motivation_2, motivation_3, or motivation_4 based on current turn
+    3. Updates last_motivation to most recent answer
+    4. Checks if motivation should be finalized
+    5. Updates confirm_motivation and motivation_type
+    """
+    import copy
+
+    # Deep copy to avoid mutations
+    stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
+    motivation_block = stage_meta.get("motivation", {}) or {}
+    motivation_state = dict(motivation_block.get("state", {}) or {})
+    motivation_meta = dict(motivation_block.get("metadata", {}) or {})
+
+    # Get stored mapping from previous agent run
+    prev_motivation_mapping = motivation_state.get("motivation_mapping", [])
+    prev_options = motivation_state.get("options", [])
+
+    # Get current turn (which question did they just answer?)
+    current_turn = motivation_state.get("turn", 0)
+
+    # Only process if we have a mapping and the user actually answered
+    if not prev_motivation_mapping or not user_answer:
+        return state
+
+    # Classify the user's answer
+    chosen_motivation = get_user_chosen_motivation(user_answer, prev_options, prev_motivation_mapping)
+
+    print(
+        f"DEBUG - update_motivation_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_motivation='{chosen_motivation}'")
+
+    # Update motivation based on which question they just answered
+    if current_turn == 1:
+        # They just answered Q1
+        motivation_state["motivation_1"] = chosen_motivation
+        motivation_state["last_motivation"] = chosen_motivation
+    elif current_turn == 2:
+        # They just answered Q2
+        motivation_state["motivation_2"] = chosen_motivation
+        motivation_state["last_motivation"] = chosen_motivation
+    elif current_turn == 3:
+        # They just answered Q3
+        motivation_state["motivation_3"] = chosen_motivation
+        motivation_state["last_motivation"] = chosen_motivation
+    elif current_turn == 4:
+        # They just answered Q4
+        motivation_state["motivation_4"] = chosen_motivation
+        motivation_state["last_motivation"] = chosen_motivation
+
+    # Get all four motivations
+    motivation_1 = motivation_state.get("motivation_1", "")
+    motivation_2 = motivation_state.get("motivation_2", "")
+    motivation_3 = motivation_state.get("motivation_3", "")
+    motivation_4 = motivation_state.get("motivation_4", "")
+
+    # Get intent_type for finalization logic
+    intent_block = stage_meta.get("connection_intent", {}) or {}
+    intent_meta = intent_block.get("metadata", {}) or {}
+    intent_type = intent_meta.get("intent_type", "")
+
+    # Check if we should finalize (after 4 questions)
+    should_finalize, final_motivation = should_finalize_motivation(
+        motivation_1, motivation_2, motivation_3, motivation_4, intent_type
+    )
+
+    print(f"DEBUG - should_finalize={should_finalize}, final_motivation='{final_motivation}'")
+
+    if should_finalize:
+        # We're done with motivation questions
+        motivation_meta["confirm_motivation"] = "clear"
+        motivation_meta["motivation_type"] = final_motivation
+    else:
+        # Keep asking questions
+        motivation_meta["confirm_motivation"] = "unclear"
+        motivation_meta["motivation_type"] = ""
+
+    # Write back the updated metadata and state
+    stage_meta["motivation"] = {
+        "metadata": motivation_meta,
+        "state": motivation_state,
+    }
+
+    return {
+        **state,
+        "stage_meta": stage_meta,
+    }
 def merge_stage_meta(left: Optional[Dict], right: Optional[Dict]) -> Dict:
     """Deep merge stage_meta dictionaries"""
     import copy
@@ -886,6 +1205,42 @@ class BaseAgent(ABC):
 
             ctx["last_intent"] = last_intent
 
+        # FOR MOTIVATION AGENT: compute last_motivation and question_direction
+        if self.info_type == "motivation":
+            stage_meta = state.get("stage_meta", {}) or {}
+
+            # Get the finalized intent from connection_intent agent
+            intent_block = stage_meta.get("connection_intent", {}) or {}
+            intent_meta = intent_block.get("metadata", {}) or {}
+            intent_type = intent_meta.get("intent_type", "")
+
+            # Get motivation state
+            motivation_block = stage_meta.get("motivation", {}) or {}
+            motivation_state = motivation_block.get("state", {}) or {}
+
+            current_turn = motivation_state.get("turn", 0)
+
+            motivation_1 = motivation_state.get("motivation_1", "")
+            motivation_2 = motivation_state.get("motivation_2", "")
+            motivation_3 = motivation_state.get("motivation_3", "")
+            last_motivation_state = motivation_state.get("last_motivation", "")
+
+            # Determine last_motivation
+            if current_turn == 0:
+                # First turn - use intent_type from intent agent
+                last_motivation = intent_type if intent_type else ""
+            else:
+                # Use last_motivation if available, otherwise intent_type
+                last_motivation = last_motivation_state if last_motivation_state else intent_type
+
+            # Compute question_direction
+            question_direction = compute_question_direction_motivation(
+                motivation_1, motivation_2, motivation_3, current_turn + 1
+            )
+
+            ctx["last_motivation"] = last_motivation
+            ctx["question_direction"] = question_direction
+
         return ctx
 
     def prepare_messages(self, ctx: Dict[str, str], state: AgentState) -> List[BaseMessage]:
@@ -943,6 +1298,19 @@ class BaseAgent(ABC):
                     metadata={},
                     state={}
                 )
+            # Use strict schema for motivation agent
+            elif self.info_type == "motivation":
+                structured_llm = llm.with_structured_output(MotivationResponse)
+                strict_response: MotivationResponse = structured_llm.invoke(msgs)
+                # Convert to AgentResponse format
+                response = AgentResponse(
+                    affirmation=strict_response.affirmation,
+                    question_text=strict_response.question_text,
+                    options=strict_response.options,
+                    intent_mapping=strict_response.motivation_mapping,  # Map motivation_mapping to intent_mapping
+                    metadata={},
+                    state={}
+                )
             else:
                 # Use flexible schema for other agents
                 structured_llm = llm.with_structured_output(AgentResponse)
@@ -982,6 +1350,21 @@ class BaseAgent(ABC):
                         "I'm not sure yet"
                     ],
                     intent_mapping=["positive", "neutral", "tense", "unsure"],
+                    metadata={"error": str(e)},
+                    state={},
+                )
+            # Return a proper fallback response for motivation agent
+            elif self.info_type == "motivation":
+                return AgentResponse(
+                    affirmation="Understanding what truly drives you is so important.",
+                    question_text="When I think about why I want to do this, I feel most motivated by...",
+                    options=[
+                        "Seeing myself improve and grow",
+                        "Expressing myself creatively",
+                        "Finding calm and balance",
+                        "I'm still figuring it out"
+                    ],
+                    intent_mapping=["progress", "expression", "relief", "unsure"],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1124,8 +1507,58 @@ class BaseAgent(ABC):
                 "metadata": new_meta,
                 "state": new_state,
             }
+            # ---------- HARD TURN / LEVEL / METADATA LOGIC FOR MOTIVATION ----------
+        if self.info_type == "motivation":
+            # Get current turn from old_state
+            old_turn = old_state.get("turn", 0)
+            try:
+                old_turn = int(old_turn)
+            except (TypeError, ValueError):
+                old_turn = 0
 
-            # ----- SPECIAL CASE: LOGIC FINALIZER -----
+            # Increment turn
+            current_turn = old_turn + 1
+            new_state["turn"] = current_turn
+
+            # Initialize fields on turn 1
+            if current_turn == 1:
+                ad_data = state.get("ad_data", {}) or {}
+                ad_theme = ad_data.get("ad_theme", "")
+                new_state["ad_theme"] = ad_theme
+                new_state["motivation_1"] = ""
+                new_state["motivation_2"] = ""
+                new_state["motivation_3"] = ""
+                new_state["motivation_4"] = ""
+                new_state["last_motivation"] = ""  # Will be set after first answer
+
+            # Set level based on turn
+            if current_turn == 1:
+                new_state["last_level"] = "L1"
+            elif current_turn == 2:
+                new_state["last_level"] = "L2"
+            elif current_turn == 3:
+                new_state["last_level"] = "L3"
+            elif current_turn == 4:
+                new_state["last_level"] = "L4"
+            else:
+                new_state["last_level"] = "L5"
+
+            # Store motivation_mapping and options from LLM response
+            if response.intent_mapping:  # motivation_mapping was mapped to intent_mapping
+                new_state["motivation_mapping"] = response.intent_mapping
+            if response.options:
+                new_state["options"] = response.options
+
+            # Keep metadata fields (these will be updated by update_motivation_metadata_after_answer)
+            new_meta.setdefault("confirm_motivation", "unclear")
+            new_meta.setdefault("motivation_type", "")
+            new_state.setdefault("last_motivation", "")
+
+            stage_meta_prev[self.info_type] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+        # ----- SPECIAL CASE: LOGIC FINALIZER -----
         if self.name == "logic_finalize":
             # Get the most up-to-date state for connection_intent
             ci_state_block = dict(new_state)
@@ -1566,6 +1999,19 @@ class Supervisor:
         emo_tone_2 = tone_state.get("emo_tone_2", "")
         emo_tone = tone_meta.get("emo_tone", "unclear")
 
+        # Extract motivation info
+        motivation_block = stage_meta.get("motivation", {}) or {}
+        motivation_meta = motivation_block.get("metadata", {}) or {}
+        motivation_state = motivation_block.get("state", {}) or {}
+
+        confirm_motivation = motivation_meta.get("confirm_motivation", "unclear")
+        motivation_turn = motivation_state.get("turn", 0)
+        motivation_1 = motivation_state.get("motivation_1", "")
+        motivation_2 = motivation_state.get("motivation_2", "")
+        motivation_3 = motivation_state.get("motivation_3", "")
+        motivation_4 = motivation_state.get("motivation_4", "")
+        motivation_type = motivation_meta.get("motivation_type", "unclear")
+
         return {
             # Raw JSON (for reference if supervisor needs full context)
             "stage_meta": json.dumps(stage_meta, ensure_ascii=False),
@@ -1586,19 +2032,30 @@ class Supervisor:
             "emo_tone_1": emo_tone_1,
             "emo_tone_2": emo_tone_2,
             "emo_tone": emo_tone,
-        }
-    def prepare_messages(self, ctx: Dict[str, str]) -> List[BaseMessage]:
-        """
-        Prepare the System + Human messages for the supervisor LLM,
-        using the YAML system + human_template.
-        """
-        sys_msg = SystemMessage(content=render_tmpl(self.system, **ctx))
-        human_msg = HumanMessage(content=render_tmpl(self.human_template, **ctx))
-        return [sys_msg, human_msg]
 
-    # ------------------------------------------------------------------
-    # NEW: LLM-DRIVEN SUPERVISOR NODE
-    # ------------------------------------------------------------------
+            # Motivation variables
+            "confirm_motivation": confirm_motivation,
+            "motivation_turn": str(motivation_turn),
+            "motivation_1": motivation_1,
+            "motivation_2": motivation_2,
+            "motivation_3": motivation_3,
+            "motivation_4": motivation_4,
+            "motivation_type": motivation_type,
+        }
+
+
+    def prepare_messages(self, ctx: Dict[str, str]) -> List[BaseMessage]:
+            """
+            Prepare the System + Human messages for the supervisor LLM,
+            using the YAML system + human_template.
+            """
+            sys_msg = SystemMessage(content=render_tmpl(self.system, **ctx))
+            human_msg = HumanMessage(content=render_tmpl(self.human_template, **ctx))
+            return [sys_msg, human_msg]
+
+        # ------------------------------------------------------------------
+        # NEW: LLM-DRIVEN SUPERVISOR NODE
+
     def process(self, state: AgentState) -> AgentState:
         """
         LLM-based routing entrypoint used by LangGraph.
@@ -1786,6 +2243,11 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
         state = update_emotional_tone_metadata_after_answer(state, msg)
         print(
             f"DEBUG - After emotional tone metadata update: confirm_tone={state.get('stage_meta', {}).get('emotional_tone', {}).get('metadata', {}).get('confirm_tone')}")
+        # Update motivation metadata if user answered a motivation question
+    if last_agent == "motivation" and msg:
+        state = update_motivation_metadata_after_answer(state, msg)
+        print(
+            f"DEBUG - After motivation metadata update: confirm_motivation={state.get('stage_meta', {}).get('motivation', {}).get('metadata', {}).get('confirm_motivation')}")
 
     new_state = graph.invoke(state)
     # Extract the AI's response text from the new messages
@@ -1887,28 +2349,70 @@ def main():
         tone_meta = tone_block.get("metadata", {}) or {}
         tone_state = tone_block.get("state", {}) or {}
 
-        # Intent fields (unchanged)
+        # Motivation block
+        motivation_block = meta.get("motivation", {}) or {}
+        motivation_meta = motivation_block.get("metadata", {}) or {}
+        motivation_state = motivation_block.get("state", {}) or {}
+
+        # Intent fields
         intent_status = intent_meta.get("confirm_intent") or intent_meta.get("intent_status", "—")
         intent_type = intent_meta.get("intent_type", "—")
 
-        #  NEW tone fields
+        # Tone fields
         confirm_tone = tone_meta.get("confirm_tone") or "unclear"
         tone_type = tone_meta.get("emo_tone") or tone_meta.get("emo_tone_type") or "—"
-        # New tone theme fields
         emo_tone_1 = tone_state.get("emo_tone_1") or "—"
         emo_tone_2 = tone_state.get("emo_tone_2") or "—"
         emo_tone_3 = tone_state.get("emo_tone_3") or "—"
 
+        # Motivation fields
+        confirm_motivation = motivation_meta.get("confirm_motivation") or "unclear"
+        motivation_type = motivation_meta.get("motivation_type", "—")
+        motivation_1 = motivation_state.get("motivation_1") or "—"
+        motivation_2 = motivation_state.get("motivation_2") or "—"
+        motivation_3 = motivation_state.get("motivation_3") or "—"
+        motivation_4 = motivation_state.get("motivation_4") or "—"
+
+        # Display insights
         st.markdown(f"- **Confirm Intent:** {intent_status or '—'}")
         st.markdown(f"- **Intent Type:** {intent_type or '—'}")
 
-        #  NEW tone display
         st.markdown(f"- **Confirm Tone:** {confirm_tone}")
         st.markdown(f"- **Tone Type:** {tone_type}")
 
-        # Optional: show separate debug states if you like
-        st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state, ensure_ascii=False)}")
-        st.markdown(f"- **TONE STATE:** {json.dumps(tone_state, ensure_ascii=False)}")
+        st.markdown(f"- **Confirm Motivation:** {confirm_motivation}")
+        st.markdown(f"- **Motivation Type:** {motivation_type}")
+
+        # Optional: show separate debug states
+        # Optional: show separate debug states
+        st.markdown("---")
+        st.markdown("**Debug States:**")
+
+        # INTENT STATE - Remove intent_mapping and options
+        intent_state_clean = {k: v for k, v in intent_state.items() if k not in ['intent_mapping', 'options']}
+        st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state_clean, ensure_ascii=False)}")
+
+        # TONE STATE
+        # TONE STATE - Remove emotional_mapping and options
+        tone_state_clean = {k: v for k, v in tone_state.items() if k not in ['emotional_mapping', 'options']}
+        st.markdown(f"- **TONE STATE:** {json.dumps(tone_state_clean, ensure_ascii=False)}")
+
+        # MOTIVATION STATE - Add individual answers
+        motivation_state_clean = {k: v for k, v in motivation_state.items() if
+                                  k not in ['motivation_mapping', 'options']}
+        st.markdown(f"- **MOTIVATION STATE:** {json.dumps(motivation_state_clean, ensure_ascii=False)}")
+
+        # Show individual motivation answers clearly
+        if any([motivation_1 != "—", motivation_2 != "—", motivation_3 != "—", motivation_4 != "—"]):
+            st.markdown("**Motivation Answers:**")
+            if motivation_1 != "—":
+                st.markdown(f"  - Motivation 1: {motivation_1}")
+            if motivation_2 != "—":
+                st.markdown(f"  - Motivation 2: {motivation_2}")
+            if motivation_3 != "—":
+                st.markdown(f"  - Motivation 3: {motivation_3}")
+            if motivation_4 != "—":
+                st.markdown(f"  - Motivation 4: {motivation_4}")
 
         if st.button("Reset conversation"):
             # Clear state and chat history, then rerun app
@@ -1950,8 +2454,11 @@ def main():
     emo_tone = tone_meta.get("emo_tone", "")
 
     # Conversation is complete when both are clear
-    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear")
-
+    motivation_block = stage_meta.get("motivation", {}) or {}
+    motivation_meta = motivation_block.get("metadata", {}) or {}
+    confirm_motivation = motivation_meta.get("confirm_motivation", "unclear")
+    # Conversation is complete when ALL THREE are clear
+    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear" and confirm_motivation == "clear")
     # ========== SHOW BUTTONS OR COMPLETION MESSAGE ==========
     if conversation_ended:
         # Show completion message
@@ -1982,7 +2489,11 @@ def main():
                         new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
                         new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
 
-                        if new_confirm_intent == "clear" and new_confirm_tone == "clear":
+                        # Check if conversation is complete (all 3 agents done)
+                        new_confirm_motivation = new_stage_meta.get("motivation", {}).get("metadata", {}).get(
+                            "confirm_motivation", "unclear")
+
+                        if new_confirm_intent == "clear" and new_confirm_tone == "clear" and new_confirm_motivation == "clear":
                             # Don't add ai_text to history - we'll show completion message instead
                             pass
                         elif ai_text:

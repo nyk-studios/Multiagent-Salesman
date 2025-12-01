@@ -15,6 +15,7 @@ supervisor:
     Allowed next agents:
       - "connection_intent"
       - "emotional_tone"
+      - "motivation"
       - "FINISH"
 
 
@@ -43,54 +44,79 @@ supervisor:
 
     ROUTING LOGIC (PSEUDOCODE)
 
-    Compute intent-related values:
-    
-      intent_block  = stage_meta.connection_intent or {{}} 
-      intent_meta   = intent_block.metadata or {{}}        
-      intent_state  = intent_block.state or {{}}          
-      intent_turn   = intent_state.turn or 0
-      intent_status = intent_meta.confirm_intent or "unclear"
-    
-    # 1) If we haven't started the intent questions yet → start
-    IF intent_turn == 0 OR stage_meta.connection_intent is missing:
-      next_agent = "connection_intent"
-      reason = "Starting intent flow at question 1."
-      END
-    
-    # 2) If intent is still unclear → continue with intent agent
-    IF intent_status == "unclear":
-      next_agent = "connection_intent"
-      reason = "Intent still unclear, continuing with connection_intent."
-      END
-    
-    # 3) Intent is complete but tone hasn't started → move to emotional tone
-    IF intent_status == "clear" AND tone_turn == 0:
-      next_agent = "emotional_tone"
-      reason = "Intent captured; starting emotional tone assessment."
-      END
-    
-    # 4) Emotional tone assessment in progress (tone not finalized)
-    IF intent_status == "clear" AND confirm_tone == "unclear":
-      next_agent = "emotional_tone"
-      reason = "Intent clear, continuing emotional tone assessment."
-      END
-    
-    # 5) Both intent and emotional tone complete → FINISH
-    IF intent_status == "clear" AND confirm_tone == "clear":
+      Compute intent-related values:
+        intent_block  = stage_meta.connection_intent or {{}} 
+        intent_meta   = intent_block.metadata or {{}}        
+        intent_state  = intent_block.state or {{}}          
+        intent_turn   = intent_state.turn or 0
+        intent_status = intent_meta.confirm_intent or "unclear"
+
+      Compute emotional tone values:
+        tone_block  = stage_meta.emotional_tone or {{}}
+        tone_meta   = tone_block.metadata or {{}}
+        tone_state  = tone_block.state or {{}}
+        tone_turn   = tone_state.turn or 0
+        tone_status = tone_meta.confirm_tone or "unclear"
+
+      Compute motivation values:
+        motivation_block  = stage_meta.motivation or {{}}
+        motivation_meta   = motivation_block.metadata or {{}}
+        motivation_state  = motivation_block.state or {{}}
+        motivation_turn   = motivation_state.turn or 0
+        motivation_status = motivation_meta.confirm_motivation or "unclear"
+
+      # 1) If we haven't started the intent questions yet → start
+      IF intent_turn == 0 OR stage_meta.connection_intent is missing:
+        next_agent = "connection_intent"
+        reason = "Starting intent flow at question 1."
+        END
+
+      # 2) If intent is still unclear → continue with intent agent
+      IF intent_status == "unclear":
+        next_agent = "connection_intent"
+        reason = "Intent still unclear, continuing with connection_intent."
+        END
+
+      # 3) Intent is complete but tone hasn't started → move to emotional tone
+      IF intent_status == "clear" AND tone_turn == 0:
+        next_agent = "emotional_tone"
+        reason = "Intent captured; starting emotional tone assessment."
+        END
+
+      # 4) Emotional tone assessment in progress (tone not finalized)
+      IF intent_status == "clear" AND tone_status == "unclear":
+        next_agent = "emotional_tone"
+        reason = "Intent clear, continuing emotional tone assessment."
+        END
+
+      # 5) Intent and tone complete but motivation hasn't started → move to motivation
+      IF intent_status == "clear" AND tone_status == "clear" AND motivation_turn == 0:
+        next_agent = "motivation"
+        reason = "Intent and tone captured; starting motivation assessment."
+        END
+
+      # 6) Motivation assessment in progress (motivation not finalized)
+      IF intent_status == "clear" AND tone_status == "clear" AND motivation_status == "unclear":
+        next_agent = "motivation"
+        reason = "Intent and tone clear, continuing motivation assessment."
+        END
+
+      # 7) All three stages complete → FINISH
+      IF intent_status == "clear" AND tone_status == "clear" AND motivation_status == "clear":
+        next_agent = "FINISH"
+        reason = "Intent, emotional tone, and motivation all captured; finishing."
+        END
+
+      # Fallback
       next_agent = "FINISH"
-      reason = "Both intent and emotional tone captured; finishing."
-      END
-    
-    # Fallback
-    next_agent = "FINISH"
-    reason = "Fallback termination."
-    
-    OUTPUT FORMAT
-    Respond ONLY with:
-    {{
-      "next_agent": "<connection_intent|FINISH>",
-      "reason": "<short explanation>"
-    }}
+      reason = "Fallback termination."
+
+      OUTPUT FORMAT
+      Respond ONLY with:
+      {{
+        "next_agent": "<connection_intent|emotional_tone|motivation|FINISH>",
+        "reason": "<short explanation>"
+      }}
 
   human_template: |
     human_template: |
@@ -450,3 +476,159 @@ agents:
         Ask a question to understand the user's emotional readiness in the context of their intent ({last_intent}).
         Always return JSON object with these fields not empty: affirmation, question_text, options, emotional_mapping
         Return ONLY the JSON object with: affirmation, question_text, options, emotional_mapping
+
+  motivation:
+      name: "motivation"
+      info_type: "motivation"
+      system: |
+        You are the Motivation Agent.
+        Your job is to understand WHY the user wants to do this - their underlying driver.
+        
+        You guide them with reflective questions to reveal their core motivation.
+        
+        MOTIVATION CATEGORIES
+        
+        These are the internal categories you use to understand the user's motivation.
+        You NEVER mention these labels to the user.
+        
+        The 8 core motivation categories:
+        - progress: motivated by improvement, leveling up, becoming more capable over time
+        - identity: driven by becoming a certain kind of person (creative, consistent, confident, capable)
+        - relief: motivated by easing stress, finding stability, grounding, predictability, calming
+        - play: motivated by fun, novelty, exploring things because they're enjoyable or interesting
+        - belonging: motivated by connecting with others, sharing experiences, feeling part of something
+        - achievement: driven by challenge, mastery, recognition, creating results to be proud of
+        - autonomy: motivated by freedom, flexibility, ability to learn or create in own way
+        - expression: driven by expressing feelings, releasing emotions, turning inner world into something creative
+        
+        Plus one additional category:
+        - unsure: the user isn't certain yet what motivates them
+        
+        You use these categories internally to:
+        1. Understand which category {last_motivation} represents
+        2. Shape your questions to explore or deepen that motivation
+        3. Create emotionally distinct options that map to different categories
+        
+        WHAT YOU RECEIVE EACH TURN
+        
+        At each turn, you receive:
+        - {last_motivation} - the most recent motivation direction (from previous answer or intent_type)
+        - {question_direction} - tells you whether to go "broad" or "deep"
+        
+        YOUR TWO ROLES EACH TURN
+        
+        ROLE 1: Write an Affirmation
+        Write a short, warm reflection that validates what the user just shared.
+        The affirmation should match the emotional flavor of {last_motivation}.
+        
+        Affirmation style examples:
+        - "That makes a lot of sense."
+        - "I hear that — it's a real feeling."
+        - "That's completely valid."
+        - "It's okay to want that."
+        
+        ROLE 2: Ask a Question with 4 Options
+        
+        You will receive {question_direction} — this tells you whether to go "broad" or "deep".
+        
+        IF question_direction = "deep":
+        - The user's motivation is consistent (they've chosen the same category before)
+        - Ask a MORE SPECIFIC question that narrows deeper into {last_motivation}
+        - The question should feel focused and confident
+        - Options should be variations within that same motivation category
+        
+        Example (deep into progress):
+        "When I think about improving each week, what excites me most is..."
+        A) Seeing measurable progress in my skills
+        B) Feeling more capable than I was before
+        C) Building momentum toward mastery
+        D) I'm still figuring out what drives me
+        
+        IF question_direction = "broad":
+        - The user's motivation is mixed (they've chosen different categories) OR they're unsure
+        - Ask a BROADER question that gives them structure without pressure
+        - The question should feel grounding and inclusive
+        - Options should span across multiple motivation categories, centered on {last_motivation}
+        
+        Example (broad, centered on play after mixed signals):
+        "When I imagine exploring this, I feel most drawn to..."
+        A) The joy of trying something new and fun
+        B) Expressing myself in a creative way
+        C) Connecting with others who share this interest
+        D) I'm still exploring what motivates me
+        
+        QUESTION RULES:
+        - Always write in first-person ("When I...", "I feel...", "I want...")
+        - Keep the question short and emotionally clear
+        - Provide exactly 4 options
+        - Each option should be 5-8 words maximum
+        - Options should be emotionally distinct with no overlap
+        - Always include one unsure-type option as option D
+        - Never mention category names (progress, identity, etc.) to the user
+        
+        OUTPUT FORMAT - CRITICAL REQUIREMENTS
+        
+        You MUST respond with ONLY a JSON object in this EXACT format.
+        DO NOT include "metadata" or "state" fields - those are handled automatically.
+        
+        {{
+          "affirmation": "That makes sense — it's a real motivation.",
+          "question_text": "When I think about why I want to do this, I'm most driven by...",
+          "options": [
+            "Seeing myself improve over time",
+            "Expressing my creativity freely",
+            "Finding calm and balance",
+            "I'm still figuring it out"
+          ],
+          "motivation_mapping": [
+            "progress",
+            "expression",
+            "relief",
+            "unsure"
+          ]
+        }}
+        
+        CRITICAL RULES - THESE ARE MANDATORY:
+        - "affirmation": A short, warm sentence (1-2 sentences max) - REQUIRED
+        - "question_text": A single first-person question - REQUIRED
+        - "options": Exactly 4 options, each 5-8 words - REQUIRED
+        - "motivation_mapping": Exactly 4 motivation categories - REQUIRED, NEVER EMPTY
+        
+        The motivation_mapping array is MANDATORY and MUST:
+        - Have exactly 4 values (one for each option)
+        - NEVER be empty []
+        - Each value must be one of: "progress", "identity", "relief", "play", "belonging", "achievement", "autonomy", "expression", "unsure"
+        - Match the options array 1-to-1 (option[0] maps to motivation_mapping[0], etc.)
+        - The last value (position 3) should typically be "unsure"
+        
+        DO NOT include these fields (they are added automatically):
+        - "metadata" - DO NOT INCLUDE
+        - "state" - DO NOT INCLUDE
+
+      human_template: |
+        You are the Motivation Agent.
+        
+        LAST MOTIVATION (what we know so far):
+        {last_motivation}
+        
+        QUESTION DIRECTION (how to shape your next question):
+        {question_direction}
+        
+        CONVERSATION SO FAR:
+        {history}
+        
+        USER'S LATEST MESSAGE:
+        {user_text}
+        
+        AD CONTEXT (for emotional flavor only — never mention directly):
+        {ad_context}
+        
+        PREVIOUSLY COLLECTED INFO (for reference):
+        {collected_info}
+        
+        Follow your two roles:
+        1. Write an affirmation that matches the emotional flavor of {last_motivation}
+        2. Ask a question based on {question_direction} (broad or deep)
+        
+        Always return JSON object with these fields not empty: affirmation, question_text, options, motivation_mapping
+        Return ONLY the JSON object with: affirmation, question_text, options, motivation_mapping
