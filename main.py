@@ -139,13 +139,13 @@ def ensure_tone_block(state: Dict[str, Any]) -> Dict[str, Any]:
     tone_state = dict(tone_block.get("state", {}) or {})
 
     if "emo_tone_type" not in tone_meta:
-        tone_meta["emo_tone_type"] = ""          # not decided yet
+        tone_meta["emo_tone_type"] = ""  # not decided yet
     if "confirm_tone" not in tone_meta:
-        tone_meta["confirm_tone"] = "unclear"    # tone not confirmed yet
+        tone_meta["confirm_tone"] = "unclear"  # tone not confirmed yet
     if "emo_tone" not in tone_meta:
-        tone_meta["emo_tone"] = "unclear"        # classification not set yet
+        tone_meta["emo_tone"] = "unclear"  # classification not set yet
     if "behavioral_signal" not in tone_meta:
-        tone_meta["behavioral_signal"] = "mixed" # safe neutral default
+        tone_meta["behavioral_signal"] = "mixed"  # safe neutral default
 
     # These two will get overwritten by the tone agent when it copies intent,
     # but we initialize them so the structure is always present.
@@ -156,18 +156,23 @@ def ensure_tone_block(state: Dict[str, Any]) -> Dict[str, Any]:
     tone_state.setdefault("last_theme", "")
     tone_state.setdefault("last_level", "")
 
-    # Add new emotional tone tracking fields <-- ADD THESE LINES
+    # Add new emotional tone tracking fields
     tone_state.setdefault("emo_tone_1", "")
     tone_state.setdefault("emo_tone_2", "")
     tone_state.setdefault("emo_tone_3", "")
+
+    # NEW: Add fields for flexible response formats
+    tone_state.setdefault("response_format_1", "multiple_choice")  # tracks format used for question 1
+    tone_state.setdefault("response_format_2", "multiple_choice")  # tracks format used for question 2
+    tone_state.setdefault("scale_range", "")  # e.g., "1-5" or "1-10" when using scales
+
     # turn = 0 means: tone agent has not asked any questions yet
     if "turn" not in tone_state:
-        tone_state["turn"] = 1
+        tone_state["turn"] = 0
 
     tone_block["metadata"] = tone_meta
     tone_block["state"] = tone_state
     stage_meta["connection_tone"] = tone_block
-
     return {
         **state,
         "stage_meta": stage_meta,
@@ -310,7 +315,8 @@ class ConnectionIntentResponse(PydanticV1BaseModel):
 
 # Now add EmotionalToneResponse right after this
 class EmotionalToneResponse(PydanticV1BaseModel):
-    """Strict response format for emotional_tone agent only."""
+    """Strict response format for emotional_tone agent only.
+    Supports multiple response formats: multiple_choice, yes_no, and scale."""
 
     affirmation: str = PydanticV1Field(
         ...,  # Required field (no default)
@@ -324,22 +330,39 @@ class EmotionalToneResponse(PydanticV1BaseModel):
         min_length=10
     )
 
-    options: List[str] = PydanticV1Field(
-        ...,  # Required field
-        description="Exactly 4 answer options",
-        min_items=4,
-        max_items=4
+    response_format: str = PydanticV1Field(
+        default="multiple_choice",
+        description="Type of response expected: 'multiple_choice', 'yes_no', or 'scale'"
     )
 
-    emotional_mapping: List[str] = PydanticV1Field(
-        ...,  # Required field - NO default!
+    # Fields for multiple_choice and yes_no formats
+    options: Optional[List[str]] = PydanticV1Field(
+        default=None,
+        description="Answer options (4 for multiple_choice, 2 for yes_no, None for scale)"
+    )
+
+    emotional_mapping: Optional[List[str]] = PydanticV1Field(
+        default=None,
         description=(
-            "Exactly 4 emotional tone categories matching the 4 options. "
-            "Each value must be one of: 'positive', 'neutral', 'tense', 'resistant', 'unsure', 'mixed'. "
-            "Example: ['positive', 'neutral', 'tense', 'unsure']"
-        ),
-        min_items=4,
-        max_items=4
+            "Emotional tone categories matching the options. "
+            "Values: 'positive', 'neutral', 'tense', 'resistant', 'unsure', 'mixed'. "
+            "Required for multiple_choice and yes_no, None for scale."
+        )
+    )
+
+    # Fields for scale format
+    scale_range: Optional[str] = PydanticV1Field(
+        default=None,
+        description="Scale range like '1-5' or '1-10' (only for scale format)"
+    )
+
+    scale_labels: Optional[Dict[str, str]] = PydanticV1Field(
+        default=None,
+        description="Optional labels for scale endpoints, e.g., {'min': 'Not at all', 'max': 'Extremely'}"
+    )
+    scale_mapping: Optional[Dict[str, str]] = PydanticV1Field(
+        default=None,
+        description = "Mapping of number ranges to emotional categories. Keys are ranges like '1-3', '4-7', values are categories like 'neutral', 'tense'. Only for scale format."
     )
 
     class Config:
@@ -706,12 +729,14 @@ def update_intent_metadata_after_answer(state: AgentState, user_answer: str) -> 
         **state,
         "stage_meta": stage_meta,
     }
+
+
 def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
     """
     Update emotional tone metadata after user answers, BEFORE the agent runs again.
 
     This function:
-    1. Classifies the user's answer using stored emotional_mapping
+    1. Classifies the user's answer using stored emotional_mapping OR scale_mapping
     2. Updates emo_tone_1 or emo_tone_2 based on current turn
     3. Checks if emotional tone should be finalized
     4. Updates confirm_tone and emo_tone
@@ -724,19 +749,51 @@ def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: 
     tone_state = dict(tone_block.get("state", {}) or {})
     tone_meta = dict(tone_block.get("metadata", {}) or {})
 
-    # Get stored mapping from previous agent run
-    prev_emotional_mapping = tone_state.get("emotional_mapping", [])
-    prev_options = tone_state.get("options", [])
-
     # Get current turn (which question did they just answer?)
     current_turn = tone_state.get("turn", 0)
 
-    # Only process if we have a mapping and the user actually answered
-    if not prev_emotional_mapping or not user_answer:
+    if not user_answer or current_turn == 0:
         return state
 
-    # Classify the user's answer
-    chosen_tone = get_user_chosen_emotional_tone(user_answer, prev_options, prev_emotional_mapping)
+    # Determine which format was used for this question
+    if current_turn == 1:
+        response_format = tone_state.get("response_format_1", "multiple_choice")
+    elif current_turn == 2:
+        response_format = tone_state.get("response_format_2", "multiple_choice")
+    else:
+        response_format = "multiple_choice"
+
+    # Classify the user's answer based on format
+    chosen_tone = ""
+
+    if response_format == "scale":
+        # For scale questions, use scale_mapping
+        scale_mapping = tone_state.get("scale_mapping", {})
+        if scale_mapping and user_answer.isdigit():
+            scale_value = int(user_answer)
+
+            # Find which range this value falls into
+            for range_str, category in scale_mapping.items():
+                if "-" in range_str:
+                    min_val, max_val = map(int, range_str.split("-"))
+                    if min_val <= scale_value <= max_val:
+                        chosen_tone = category
+                        break
+                elif range_str.isdigit() and int(range_str) == scale_value:
+                    # Exact match (e.g., "3": "neutral")
+                    chosen_tone = category
+                    break
+    else:
+        # For multiple_choice and yes_no, use emotional_mapping
+        prev_emotional_mapping = tone_state.get("emotional_mapping", [])
+        prev_options = tone_state.get("options", [])
+
+        # Filter out empty strings from padding
+        prev_emotional_mapping = [m for m in prev_emotional_mapping if m]
+        prev_options = [o for o in prev_options if o]
+
+        if prev_emotional_mapping and prev_options:
+            chosen_tone = get_user_chosen_emotional_tone(user_answer, prev_options, prev_emotional_mapping)
 
     print(
         f"DEBUG - update_emotional_tone_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_tone='{chosen_tone}'")
@@ -1701,16 +1758,40 @@ class BaseAgent(ABC):
                     state={}
                 )
             # Use strict schema for emotional_tone agent
+            # Use strict schema for emotional_tone agent
+            # Use strict schema for emotional_tone agent
             elif self.info_type == "emotional_tone":
                 structured_llm = llm.with_structured_output(EmotionalToneResponse)
                 strict_response: EmotionalToneResponse = structured_llm.invoke(msgs)
+
                 # Convert to AgentResponse format
+                # Store response_format and scale-specific data in metadata
+                tone_metadata = {
+                    "response_format": strict_response.response_format
+                }
+
+                # Add scale-specific fields if this is a scale question
+                if strict_response.response_format == "scale":
+                    tone_metadata["scale_range"] = strict_response.scale_range
+                    tone_metadata["scale_labels"] = strict_response.scale_labels or {}
+                    tone_metadata["scale_mapping"] = strict_response.scale_mapping or {}
+
+                # Pad emotional_mapping to always have 4 items (AgentResponse requirement)
+                emotional_mapping = list(strict_response.emotional_mapping or [])
+                while len(emotional_mapping) < 4:
+                    emotional_mapping.append("")  # Pad with empty strings
+
+                # Pad options to match if needed
+                options = list(strict_response.options or [])
+                while len(options) < 4:
+                    options.append("")  # Pad with empty strings
+
                 response = AgentResponse(
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
-                    options=strict_response.options,
-                    intent_mapping=strict_response.emotional_mapping,  # Map emotional_mapping to intent_mapping
-                    metadata={},
+                    options=options,
+                    intent_mapping=emotional_mapping,
+                    metadata=tone_metadata,
                     state={}
                 )
             # Use strict schema for motivation agent
@@ -1783,6 +1864,7 @@ class BaseAgent(ABC):
                     state={},
                 )
             # Return a proper fallback response for emotional_tone agent
+
             elif self.info_type == "emotional_tone":
                 return AgentResponse(
                     affirmation="It's completely okay to feel however you're feeling right now.",
@@ -1973,12 +2055,31 @@ class BaseAgent(ABC):
             if current_turn == 1:
                 new_state["emo_tone_1"] = ""
                 new_state["emo_tone_2"] = ""
+                new_state["response_format_1"] = ""
+                new_state["response_format_2"] = ""
 
-            # Store emotional_mapping and options from LLM response
-            if response.intent_mapping:  # emotional_mapping was mapped to intent_mapping
-                new_state["emotional_mapping"] = response.intent_mapping
-            if response.options:
-                new_state["options"] = response.options
+            # Get response format from metadata
+            response_format = resp_meta.get("response_format", "multiple_choice")
+
+            # Store response format for this turn
+            if current_turn == 1:
+                new_state["response_format_1"] = response_format
+            elif current_turn == 2:
+                new_state["response_format_2"] = response_format
+
+            # Handle different response formats
+            if response_format == "scale":
+                # For scale: store scale_range and scale_mapping
+                new_state["scale_range"] = resp_meta.get("scale_range", "")
+                new_state["scale_labels"] = resp_meta.get("scale_labels", {})
+                new_state["scale_mapping"] = resp_meta.get("scale_mapping", {})
+                # Don't store options/emotional_mapping for scales
+            else:
+                # For multiple_choice and yes_no: store options and mapping
+                if response.intent_mapping:  # emotional_mapping was mapped to intent_mapping
+                    new_state["emotional_mapping"] = response.intent_mapping
+                if response.options:
+                    new_state["options"] = response.options
 
             # Keep metadata fields (these will be updated by update_emotional_tone_metadata_after_answer)
             new_meta.setdefault("confirm_tone", "unclear")
@@ -2820,6 +2921,8 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
     state = ensure_tone_block(state)
     # Update intent metadata if user answered an intent question
     last_agent = state.get("last_agent", "")
+    print(f"🔍 DEBUG - Full state keys: {list(state.keys())}")  # ADD THIS
+    print(f"🔍 DEBUG - process_user_message: last_agent='{last_agent}', msg='{msg}'")  # ADD THIS
 
     # Update intent metadata if user answered an intent question
     if last_agent == "connection_intent" and msg:
@@ -3008,8 +3111,69 @@ def main():
         st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state_clean, ensure_ascii=False)}")
 
         # TONE STATE - Remove emotional_mapping and options
+        # TONE STATE - Remove emotional_mapping and options
         tone_state_clean = {k: v for k, v in tone_state.items() if k not in ['emotional_mapping', 'options']}
         st.markdown(f"- **TONE STATE:** {json.dumps(tone_state_clean, ensure_ascii=False)}")
+
+        # Show individual emotional tone answers with format information
+        if any([emo_tone_1 != "—", emo_tone_2 != "—"]):
+            st.markdown("**Emotional Tone Answers:**")
+
+            # Get response formats
+            response_format_1 = tone_state.get("response_format_1", "")
+            response_format_2 = tone_state.get("response_format_2", "")
+            scale_range = tone_state.get("scale_range", "")
+            scale_mapping = tone_state.get("scale_mapping", {})
+
+            # Question 1
+            if emo_tone_1 != "—":
+                if response_format_1 == "scale":
+                    # For scale responses, show value + interpretation
+                    st.markdown(f"  - **Tone Q1 (Scale {scale_range}):** {emo_tone_1}")
+
+                    # Interpret the scale value
+                    if scale_mapping and emo_tone_1.isdigit():
+                        scale_value = int(emo_tone_1)
+                        interpreted_category = "—"
+
+                        # Find which range this value falls into
+                        for range_str, category in scale_mapping.items():
+                            if "-" in range_str:
+                                min_val, max_val = map(int, range_str.split("-"))
+                                if min_val <= scale_value <= max_val:
+                                    interpreted_category = category
+                                    break
+
+                        st.markdown(f"    → Interpreted as: **{interpreted_category}**")
+                else:
+                    # For multiple_choice or yes_no
+                    format_label = response_format_1 if response_format_1 else "multiple_choice"
+                    st.markdown(f"  - **Tone Q1 ({format_label}):** {emo_tone_1}")
+
+            # Question 2
+            if emo_tone_2 != "—":
+                if response_format_2 == "scale":
+                    # For scale responses, show value + interpretation
+                    st.markdown(f"  - **Tone Q2 (Scale {scale_range}):** {emo_tone_2}")
+
+                    # Interpret the scale value
+                    if scale_mapping and emo_tone_2.isdigit():
+                        scale_value = int(emo_tone_2)
+                        interpreted_category = "—"
+
+                        # Find which range this value falls into
+                        for range_str, category in scale_mapping.items():
+                            if "-" in range_str:
+                                min_val, max_val = map(int, range_str.split("-"))
+                                if min_val <= scale_value <= max_val:
+                                    interpreted_category = category
+                                    break
+
+                        st.markdown(f"    → Interpreted as: **{interpreted_category}**")
+                else:
+                    # For multiple_choice or yes_no
+                    format_label = response_format_2 if response_format_2 else "multiple_choice"
+                    st.markdown(f"  - **Tone Q2 ({format_label}):** {emo_tone_2}")
 
         # MOTIVATION STATE - Remove motivation_mapping and options
         motivation_state_clean = {k: v for k, v in motivation_state.items() if
@@ -3129,43 +3293,126 @@ def main():
         st.markdown("---")
         st.markdown("We've captured your preferences and will tailor your experience accordingly. 🎉")
     else:
-        # Buttons for current options (only if conversation is ongoing)
+        # Buttons/Input for current options (only if conversation is ongoing)
         options = st.session_state.state.get("last_options", []) or []
         if options and st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
             with st.chat_message("assistant"):
-                st.write("Choose an option:")
-                cols = st.columns(len(options))
-                for i, opt in enumerate(options):
-                    if cols[i].button(opt, key=f"opt_{i}"):
-                        st.session_state.chat_history.append({"role": "user", "content": opt})
-                        ai_text, new_state = process_user_message(
-                            st.session_state.graph, st.session_state.state, opt
-                        )
-                        st.session_state.state = new_state
+                # Determine response format from stage_meta
+                stage_meta = st.session_state.state.get("stage_meta", {}) or {}
 
-                        # Check if conversation just ended
-                        new_stage_meta = new_state.get("stage_meta", {}) or {}
-                        new_intent_meta = new_stage_meta.get("connection_intent", {}).get("metadata", {})
-                        new_tone_meta = new_stage_meta.get("emotional_tone", {}).get("metadata",
-                                                                                     {}) or new_stage_meta.get(
-                            "connection_tone", {}).get("metadata", {})
-                        new_motivation_meta = new_stage_meta.get("motivation", {}).get("metadata", {})
-                        new_barriers_meta = new_stage_meta.get("barriers", {}).get("metadata", {})
+                # Determine which agent is currently active
+                last_agent = st.session_state.state.get("last_agent", "")
 
-                        new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
-                        new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
-                        new_confirm_motivation = new_motivation_meta.get("confirm_motivation", "unclear")
-                        new_confirm_barriers = new_barriers_meta.get("confirm_barriers", "unclear")
+                # Only check for flexible formats if emotional_tone agent is active
+                if last_agent == "emotional_tone":
+                    # Check emotional_tone agent state for response format
+                    tone_block = stage_meta.get("emotional_tone", {}) or {}
+                    tone_state = tone_block.get("state", {}) or {}
+                    tone_turn = tone_state.get("turn", 0)
 
-                        # Check if conversation is complete (all 4 agents done)
-                        if (new_confirm_intent == "clear" and new_confirm_tone == "clear" and
-                                new_confirm_motivation == "clear" and new_confirm_barriers == "clear"):
-                            # Don't add ai_text to history - we'll show completion message instead
-                            pass
-                        elif ai_text:
-                            st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+                    # Get the response format for the current question
+                    if tone_turn == 1:
+                        response_format = tone_state.get("response_format_1", "multiple_choice")
+                    elif tone_turn == 2:
+                        response_format = tone_state.get("response_format_2", "multiple_choice")
+                    else:
+                        response_format = "multiple_choice"
 
-                        st.rerun()
+                    # Get scale info if needed
+                    scale_range = tone_state.get("scale_range", "")
+                    scale_labels = tone_state.get("scale_labels", {})
+                else:
+                    # All other agents use standard multiple_choice format
+                    response_format = "multiple_choice"
+                    scale_range = ""
+                    scale_labels = {}
+
+                # Get scale info if needed
+                scale_range = tone_state.get("scale_range", "")
+                scale_labels = tone_state.get("scale_labels", {})
+
+                user_response = None
+
+                # RENDER BASED ON RESPONSE FORMAT
+                if response_format == "scale":
+                    # SCALE INPUT: Show slider
+                    st.write("Rate your response:")
+
+                    # Parse scale range
+                    if scale_range and "-" in scale_range:
+                        min_val, max_val = map(int, scale_range.split("-"))
+                    else:
+                        min_val, max_val = 1, 10  # Default
+
+                    # Show labels if available
+                    if scale_labels:
+                        min_label = scale_labels.get("min", "")
+                        max_label = scale_labels.get("max", "")
+                        if min_label and max_label:
+                            st.caption(f"**{min_val}:** {min_label} | **{max_val}:** {max_label}")
+
+                    # Slider input
+                    scale_value = st.slider(
+                        "Select a value:",
+                        min_value=min_val,
+                        max_value=max_val,
+                        value=min_val,
+                        key="scale_slider"
+                    )
+
+                    if st.button("Submit", key="scale_submit"):
+                        user_response = str(scale_value)
+
+                elif response_format == "yes_no":
+                    # YES/NO INPUT: Show 2 buttons
+                    st.write("Choose your answer:")
+                    col1, col2 = st.columns(2)
+                    if len(options) >= 2:
+                        if col1.button(options[0], key="yes_no_0"):
+                            user_response = options[0]
+                        if col2.button(options[1], key="yes_no_1"):
+                            user_response = options[1]
+
+                else:
+                    # MULTIPLE CHOICE: Show 4 buttons (default behavior)
+                    st.write("Choose an option:")
+                    cols = st.columns(len(options))
+                    for i, opt in enumerate(options):
+                        if cols[i].button(opt, key=f"opt_{i}"):
+                            user_response = opt
+
+                # PROCESS USER RESPONSE
+                if user_response:
+                    st.session_state.chat_history.append({"role": "user", "content": user_response})
+                    ai_text, new_state = process_user_message(
+                        st.session_state.graph, st.session_state.state, user_response
+                    )
+                    st.session_state.state = new_state
+
+                    # Check if conversation just ended
+                    new_stage_meta = new_state.get("stage_meta", {}) or {}
+                    new_intent_meta = new_stage_meta.get("connection_intent", {}).get("metadata", {})
+                    new_tone_meta = new_stage_meta.get("emotional_tone", {}).get("metadata",
+                                                                                 {}) or new_stage_meta.get(
+                        "connection_tone", {}).get("metadata", {})
+                    new_motivation_meta = new_stage_meta.get("motivation", {}).get("metadata", {})
+                    new_barriers_meta = new_stage_meta.get("barriers", {}).get("metadata", {})
+
+                    new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
+                    new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
+                    new_confirm_motivation = new_motivation_meta.get("confirm_motivation", "unclear")
+                    new_confirm_barriers = new_barriers_meta.get("confirm_barriers", "unclear")
+
+                    # Check if conversation is complete (all 4 agents done)
+                    if (new_confirm_intent == "clear" and new_confirm_tone == "clear" and
+                            new_confirm_motivation == "clear" and new_confirm_barriers == "clear"):
+                        # Don't add ai_text to history - we'll show completion message instead
+                        pass
+                    elif ai_text:
+                        st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+
+                    st.rerun()
+
 
         # Free-text input (only if conversation is ongoing)
         prompt = st.chat_input("Type your message...")
