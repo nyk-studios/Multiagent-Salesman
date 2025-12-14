@@ -48,17 +48,22 @@ AGENT_CONFIGS: Dict[str, Dict[str, Any]] = _raw_cfg.get("agents", {})
 SUPERVISOR_PROMPTS: Dict[str, str] = _raw_cfg.get("supervisor", {})
 
 def format_affirmation(affirmation: str) -> str:
-    """Format affirmation text in red and bold for Streamlit markdown."""
+    """Format affirmation text in red, bold, bigger, and centered for Streamlit markdown."""
     if affirmation:
-        return f"**<span style='color:red'>{affirmation}</span>**"
+        return f"<div style='text-align: center; margin-bottom: 40px;'><strong><span style='color:red; font-size:36px;'>{affirmation}</span></strong></div>"
     return ""
+
 
 def format_hook_text(hook_text: str) -> str:
     """Format hook text with larger font size for Streamlit markdown."""
     if hook_text:
         return f"<span style='font-size:30px'>{hook_text}</span>"
     return ""
-
+def format_question_text(question_text: str) -> str:
+    """Format question text with larger font size and center alignment."""
+    if question_text:
+        return f"<div style='text-align: center; font-size: 36px;'>{question_text}</div>"
+    return ""
 # ============================================================================
 # AD DATA INTEGRATION
 # ============================================================================
@@ -2216,8 +2221,8 @@ class BaseAgent(ABC):
         # Check if this is from hook agent and format accordingly
         if self.info_type == "hook" and response.question_text:
             display_text += format_hook_text(response.question_text)
-        else:
-            display_text += response.question_text or ""
+        elif response.question_text:
+            display_text += format_question_text(response.question_text)
 
         if response.options:
             lines = []
@@ -3369,6 +3374,22 @@ def _init_session():
 
 def main():
     st.set_page_config(page_title="Sparky – Enhanced Multi-Stage", layout="wide")
+    # Custom CSS to make buttons much bigger
+    st.markdown("""
+            <style>
+            div.stButton > button * {
+                font-size: 20px !important;
+            }
+            div.stButton > button {
+                font-size: 20px !important;
+                padding: 20px 40px !important;
+                height: auto !important;
+                min-height: 70px !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+
     st.title("🤖 Sparky – Enhanced Multi-Stage AI Salesman")
     _init_session()
 
@@ -3677,10 +3698,19 @@ def main():
             st.session_state.chat_history = []
             st.rerun()
 
-    # Show chat history
-    for t in st.session_state.chat_history:
-        with st.chat_message(t["role"]):
-            st.markdown(t["content"], unsafe_allow_html=True)
+    # Show only the LAST assistant message (current question)
+    if st.session_state.chat_history:
+        # Find the last assistant message
+        last_assistant_msg = None
+        for t in reversed(st.session_state.chat_history):
+            if t["role"] == "assistant":
+                last_assistant_msg = t
+                break
+
+        if last_assistant_msg:
+            with st.chat_message("assistant"):
+                st.markdown(last_assistant_msg["content"], unsafe_allow_html=True)
+
 
     # ========== CHECK IF CONVERSATION IS COMPLETE ==========
     stage_meta = st.session_state.state.get("stage_meta", {}) or {}
@@ -3763,21 +3793,29 @@ def main():
         hook_meta = hook_block.get("metadata", {}) or {}
         hook_status = hook_meta.get("hook_status", "unclear")
 
-        # If hook just displayed and status is clear, automatically trigger next agent
+        # If hook just displayed, show Continue button
         if hook_status == "clear" and st.session_state.chat_history and st.session_state.chat_history[-1][
             "role"] == "assistant":
             last_msg_content = st.session_state.chat_history[-1]["content"]
-            # Check if this is the hook message (contains the hook text)
             hook_text = hook_meta.get("hook_text", "")
+
+            # Check if this is the hook message
             if hook_text and hook_text in last_msg_content:
-                # Auto-trigger next turn (Act 1)
-                ai_text, new_state = process_user_message(
-                    st.session_state.graph, st.session_state.state, ""
-                )
-                st.session_state.state = new_state
-                if ai_text:
-                    st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
-                st.rerun()
+                # Show Continue button
+                if st.button("Continue", key="hook_continue", type="primary"):
+                    # Clear hook message and trigger next agent
+                    ai_text, new_state = process_user_message(
+                        st.session_state.graph, st.session_state.state, ""
+                    )
+                    st.session_state.state = new_state
+                    # Clear chat history and add only new question
+                    st.session_state.chat_history = []
+                    if ai_text:
+                        st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+                    st.rerun()
+                # Don't show options or input when hook is displayed
+                return
+
 
         # Buttons/Input for current options (only if conversation is ongoing)
         options = st.session_state.state.get("last_options", []) or []
@@ -3849,22 +3887,22 @@ def main():
                     if st.button("Submit", key="scale_submit"):
                         user_response = str(scale_value)
 
+
                 elif response_format == "yes_no":
-                    # YES/NO INPUT: Show 2 buttons
-                    st.write("Choose your answer:")
+                    # YES/NO INPUT: Show 2 buttons at bottom
+                    st.markdown("<br><br><br><br><br><br><br><br><br>", unsafe_allow_html=True)  # Push to bottom
                     col1, col2 = st.columns(2)
                     if len(options) >= 2:
-                        if col1.button(options[0], key="yes_no_0"):
+                        if col1.button(options[0], key="yes_no_0", use_container_width=True):
                             user_response = options[0]
-                        if col2.button(options[1], key="yes_no_1"):
+                        if col2.button(options[1], key="yes_no_1", use_container_width=True):
                             user_response = options[1]
-
                 else:
-                    # MULTIPLE CHOICE: Show 4 buttons (default behavior)
-                    st.write("Choose an option:")
+                    # MULTIPLE CHOICE: Show 4 buttons at bottom
+                    st.markdown("<br><br><br><br><br><br><br><br><br>", unsafe_allow_html=True)  # Push to bottom
                     cols = st.columns(len(options))
                     for i, opt in enumerate(options):
-                        if cols[i].button(opt, key=f"opt_{i}"):
+                        if cols[i].button(opt, key=f"opt_{i}", use_container_width=True):
                             user_response = opt
 
                 # PROCESS USER RESPONSE
@@ -3873,7 +3911,8 @@ def main():
                     ai_text, new_state = process_user_message(
                         st.session_state.graph, st.session_state.state, user_response
                     )
-                    st.session_state.state = new_state
+                    # Clear chat history - only show current question
+                    st.session_state.chat_history = []
 
                     # Check if conversation just ended
                     new_stage_meta = new_state.get("stage_meta", {}) or {}
