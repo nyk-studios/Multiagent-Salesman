@@ -28,7 +28,7 @@ try:
 except Exception:
     ChatOpenAI = None
 
-DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "new_config.yaml")
+DEFAULT_CONFIG_PATH = os.getenv("AGENT_CONFIG_PATH", "try.yaml")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 USE_OPENAI = bool(OPENAI_API_KEY and ChatOpenAI)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
@@ -47,8 +47,17 @@ else:
 AGENT_CONFIGS: Dict[str, Dict[str, Any]] = _raw_cfg.get("agents", {})
 SUPERVISOR_PROMPTS: Dict[str, str] = _raw_cfg.get("supervisor", {})
 
+def format_affirmation(affirmation: str) -> str:
+    """Format affirmation text in red and bold for Streamlit markdown."""
+    if affirmation:
+        return f"**<span style='color:red'>{affirmation}</span>**"
+    return ""
 
-
+def format_hook_text(hook_text: str) -> str:
+    """Format hook text with larger font size for Streamlit markdown."""
+    if hook_text:
+        return f"<span style='font-size:30px'>{hook_text}</span>"
+    return ""
 
 # ============================================================================
 # AD DATA INTEGRATION
@@ -74,7 +83,7 @@ MOCK_ADS: Dict[str, AdData] = {
             "work. The ad sells variety and mastery potential across many skills, creating a sense "
             "of progress, challenge, and personal capability — ideal for an achievement-driven funnel."
         ),
-        "ad_theme": "skill_growth",
+        "ad_theme": "confidence_progress",
     },
     "adhd_advantage": {
         "ad_name": "Neurodivergent Empowerment",
@@ -85,7 +94,7 @@ MOCK_ADS: Dict[str, AdData] = {
             "The emotional driver is relief + empowerment, not productivity, and it reassures them that "
             "Skill-A-Week works with their brain through flexibility, beginner-friendliness, and small wins."
         ),
-        "ad_theme": "wellness",
+        "ad_theme": "calm_wellbeing",
     },
     "cookies_asmr": {
         "ad_name": "Sensory Soother",
@@ -95,7 +104,7 @@ MOCK_ADS: Dict[str, AdData] = {
             "sensory-sensitive people who want low-pressure, feel-good activities that help them unwind. "
             "The promise isn’t mastery — it’s gentle creativity and emotional soothing, framed as self-care."
         ),
-        "ad_theme": "wellness",
+        "ad_theme": "calm_wellbeing",
     },
     "purpose_tiktok": {
         "ad_name": "Creative Purpose",
@@ -105,7 +114,7 @@ MOCK_ADS: Dict[str, AdData] = {
             "and inner clarity. It attracts seekers craving depth, intention, and personal rebirth, and the "
             "journey is about rediscovery rather than rushing toward skills or outcomes."
         ),
-        "ad_theme": "self_expression",
+        "ad_theme": "exploration_discovery",
     },
     "narrator_and_lily": {
         "ad_name": "Heartfelt Connection",
@@ -114,7 +123,7 @@ MOCK_ADS: Dict[str, AdData] = {
             "moments. It appeals to parents, sentimental adults, and nostalgic creatives who value bonding "
             "and meaningful experiences. Creativity is framed as a way to nurture relationships and build memories."
         ),
-        "ad_theme": "belonging",
+        "ad_theme": "enrichment_purpose",
     },
     "money_making": {
         "ad_name": "Creative Income Builder",
@@ -124,55 +133,56 @@ MOCK_ADS: Dict[str, AdData] = {
             "stuck to earning through creative output. The emotional driver is empowerment via financial "
             "autonomy, with emphasis on ROI, sellable skills, and practical steps to turn skills into income."
         ),
-        "ad_theme": "ambition",
+        "ad_theme": "confidence_progress",
     },
 }
 # ---------------------------------------------------------------------------
 # Ensure connection_tone block exists with default emo fields
-# ---------------------------------------------------------------------------
-def ensure_tone_block(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Guarantee that stage_meta.connection_tone exists with default emo fields."""
+# --------------------------------------------------------------
+#
+def ensure_act_2_block(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Guarantee that stage_meta.act_2 exists with default emo fields."""
     stage_meta = dict(state.get("stage_meta", {}) or {})
 
-    tone_block = dict(stage_meta.get("connection_tone", {}) or {})
-    tone_meta = dict(tone_block.get("metadata", {}) or {})
-    tone_state = dict(tone_block.get("state", {}) or {})
+    act_2_block = dict(stage_meta.get("act_2", {}) or {})
+    act_2_meta = dict(act_2_block.get("metadata", {}) or {})
+    act_2_state = dict(act_2_block.get("state", {}) or {})
 
-    if "emo_tone_type" not in tone_meta:
-        tone_meta["emo_tone_type"] = ""  # not decided yet
-    if "confirm_tone" not in tone_meta:
-        tone_meta["confirm_tone"] = "unclear"  # tone not confirmed yet
-    if "emo_tone" not in tone_meta:
-        tone_meta["emo_tone"] = "unclear"  # classification not set yet
-    if "behavioral_signal" not in tone_meta:
-        tone_meta["behavioral_signal"] = "mixed"  # safe neutral default
+    if "emo_act_2_type" not in act_2_meta:
+        act_2_meta["emo_act_2_type"] = ""  # not decided yet
+    if "confirm_act_2" not in act_2_meta:
+        act_2_meta["confirm_act_2"] = "unclear"  # tone not confirmed yet
+    if "act_2_emo_tone" not in act_2_meta:
+        act_2_meta["act_2_emo_tone"] = "unclear"  # classification not set yet
+    if "behavioral_signal" not in act_2_meta:
+        act_2_meta["behavioral_signal"] = "mixed"  # safe neutral default
 
     # These two will get overwritten by the tone agent when it copies intent,
     # but we initialize them so the structure is always present.
-    tone_meta.setdefault("intent_type", "")
-    tone_meta.setdefault("confirm_intent", "unclear")
+    act_2_meta.setdefault("act_1_type", "")
+    act_2_meta.setdefault("confirm_act_1", "unclear")
 
     # --- State defaults ---
-    tone_state.setdefault("last_theme", "")
-    tone_state.setdefault("last_level", "")
+    act_2_state.setdefault("last_theme", "")
+    act_2_state.setdefault("last_level", "")
 
     # Add new emotional tone tracking fields
-    tone_state.setdefault("emo_tone_1", "")
-    tone_state.setdefault("emo_tone_2", "")
-    tone_state.setdefault("emo_tone_3", "")
+    act_2_state.setdefault("act_2_emo_1", "")
+    act_2_state.setdefault("act_2_emo_2", "")
+    act_2_state.setdefault("act_2_emo_3", "")
 
     # NEW: Add fields for flexible response formats
-    tone_state.setdefault("response_format_1", "multiple_choice")  # tracks format used for question 1
-    tone_state.setdefault("response_format_2", "multiple_choice")  # tracks format used for question 2
-    tone_state.setdefault("scale_range", "")  # e.g., "1-5" or "1-10" when using scales
+    act_2_state.setdefault("response_format_1", "multiple_choice")  # tracks format used for question 1
+    act_2_state.setdefault("response_format_2", "multiple_choice")  # tracks format used for question 2
+    act_2_state.setdefault("scale_range", "")  # e.g., "1-5" or "1-10" when using scales
 
     # turn = 0 means: tone agent has not asked any questions yet
-    if "turn" not in tone_state:
-        tone_state["turn"] = 0
+    if "turn" not in act_2_state:
+        act_2_state["turn"] = 0
 
-    tone_block["metadata"] = tone_meta
-    tone_block["state"] = tone_state
-    stage_meta["connection_tone"] = tone_block
+    act_2_block["metadata"] = act_2_meta
+    act_2_block["state"] = act_2_state
+    stage_meta["act_2"] = act_2_block
     return {
         **state,
         "stage_meta": stage_meta,
@@ -230,8 +240,8 @@ class AgentResponse(PydanticV1BaseModel):
     - affirmation: warm reflection/validation (for connection_intent agent).
     - question_text: conversational question or prompt.
     - options: list of answer choices.
-    - intent_mapping: intent categories for each option (for connection_intent agent).
-    - metadata: agent-specific output (intent, motivation_type, barriers, persona, etc.).
+    - option_mapping: category mappings for each option (agent-specific categories).
+    - metadata: agent-specific output (intent, act_3_type, barriers, persona, etc.).
     - state: agent-specific state (turn counts, levels, flags, progress).
     """
 
@@ -250,11 +260,11 @@ class AgentResponse(PydanticV1BaseModel):
         description="Answer options (any number, typically 4)"
     )
 
-    intent_mapping: List[str] = PydanticV1Field(
+    option_mapping: List[str] = PydanticV1Field(
         ...,  # Required field - NO default!
         description=(
-            "Exactly 4 intent categories matching the 4 options. "
-            "Each value must be one of: 'self_expression', 'wellness', 'skill_growth', 'ambition', 'belonging', 'unsure'. "
+            "Category mapping for each option (4 items). "
+            "Categories are agent-specific: intent categories for Act 1, emotional categories for Act 2, etc. "
             "Example: ['belonging', 'skill_growth', 'wellness', 'unsure']"
         ),
         min_items=4,
@@ -298,7 +308,7 @@ class ConnectionIntentResponse(PydanticV1BaseModel):
         max_items=4
     )
 
-    intent_mapping: List[str] = PydanticV1Field(  # ← Changed from List[Literal[...]]
+    option_mapping: List[str] = PydanticV1Field(  # ← Renamed from act_1_mapping
         ...,  # Required field - NO default!
         description=(
             "Exactly 4 intent categories matching the 4 options. "
@@ -341,7 +351,7 @@ class EmotionalToneResponse(PydanticV1BaseModel):
         description="Answer options (4 for multiple_choice, 2 for yes_no, None for scale)"
     )
 
-    emotional_mapping: Optional[List[str]] = PydanticV1Field(
+    act_2_emotional_mapping: Optional[List[str]] = PydanticV1Field(
         default=None,
         description=(
             "Emotional tone categories matching the options. "
@@ -367,7 +377,15 @@ class EmotionalToneResponse(PydanticV1BaseModel):
 
     class Config:
         extra = "forbid"
+# Hook Response for hook agent
+class HookResponse(PydanticV1BaseModel):
+    hook_text: str = PydanticV1Field(description="The 2-3 sentence hook message")
+
+    class Config:
+        extra = "forbid"
+
 # Motivation Response for motivation agent
+
 class MotivationResponse(PydanticV1BaseModel):
     """Strict response format for motivation agent only."""
 
@@ -390,7 +408,7 @@ class MotivationResponse(PydanticV1BaseModel):
         max_items=4
     )
 
-    motivation_mapping: List[str] = PydanticV1Field(
+    act_3_mapping: List[str] = PydanticV1Field(
         ...,  # Required field - NO default!
         description=(
             "Exactly 4 motivation categories matching the 4 options. "
@@ -426,7 +444,7 @@ class BarriersResponse(PydanticV1BaseModel):
         max_items=4
     )
 
-    barriers_mapping: List[str] = PydanticV1Field(
+    act_4_mapping: List[str] = PydanticV1Field(
         ...,  # Required field - NO default!
         description=(
             "Exactly 4 barrier categories matching the 4 options. "
@@ -460,19 +478,19 @@ class SummaryResponse(PydanticV1BaseModel):
     class Config:
         extra = "forbid"
 
-def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: List[str]) -> str:
+def get_user_chosen_act_1(user_input: str, options: List[str], option_mapping: List[str]) -> str:
     """
     Determine which intent the user chose based on their input.
 
     Args:
         user_input: The user's message (e.g., "A" or "Build new skills")
         options: List of option texts from previous turn
-        intent_mapping: List of intent categories matching each option
+        option_mapping: List of intent categories matching each option
 
     Returns:
         The intent category (e.g., "skill_growth", "wellness", "unsure")
     """
-    if not options or not intent_mapping:
+    if not options or not option_mapping:
         return "unsure"
 
     user_input_clean = user_input.strip().lower()
@@ -480,14 +498,14 @@ def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: 
     # Check if user typed A, B, C, D
     if len(user_input_clean) == 1 and user_input_clean in ['a', 'b', 'c', 'd']:
         idx = ord(user_input_clean) - ord('a')
-        if 0 <= idx < len(intent_mapping):
-            return intent_mapping[idx]
+        if 0 <= idx < len(option_mapping):
+            return option_mapping[idx]
 
     # Check if user typed the full option text
     for i, option in enumerate(options):
         if option.lower() in user_input_clean or user_input_clean in option.lower():
-            if i < len(intent_mapping):
-                return intent_mapping[i]
+            if i < len(option_mapping):
+                return option_mapping[i]
 
     # Fallback
     return "unsure"
@@ -495,75 +513,78 @@ def get_user_chosen_intent(user_input: str, options: List[str], intent_mapping: 
 
 def compute_question_direction(theme_1: str, theme_2: str, current_turn: int) -> str:
     """
-    Determine if next question should be 'broad' or 'deep'.
+    Determine if next question should be 'broad' or 'focused'.
 
-    Logic:
-    - Turn 1: Always broad (exploring from ad)
-    - Turn 2: Deep if theme_1 is clear and not unsure, broad otherwise
-    - Turn 3: Deep if theme_1 == theme_2 (consistent), broad if mixed or unsure
+    Fixed pattern:
+    - Turn 1: broad (aspiration)
+    - Turn 2: focused (aspiration)
+    - Turn 3: broad (identity shift)
+    - Turn 4: focused (identity shift)
     """
     if current_turn == 1:
         return "broad"
-
-    if current_turn == 2:
-        # We have theme_1 now
-        if theme_1 in ["unsure", ""]:
-            return "broad"
-        else:
-            return "deep"  # User showed clear intent in Q1
-
-    if current_turn == 3:
-        # We have theme_1 and theme_2
-        if theme_1 == theme_2 and theme_1 not in ["unsure", ""]:
-            return "deep"  # Consistent intent
-        else:
-            return "broad"  # Mixed or unsure
-
-    return "broad"  # Fallback
+    elif current_turn == 2:
+        return "focused"
+    elif current_turn == 3:
+        return "broad"
+    elif current_turn == 4:
+        return "focused"
+    else:
+        return "broad"  # Fallback
 
 
-def should_finalize_intent(theme_1: str, theme_2: str, theme_3: str, ad_theme: str) -> Tuple[bool, str]:
+def should_finalize_act_1(theme_1: str, theme_2: str, theme_3: str, theme_4: str, ad_theme: str) -> Tuple[bool, str]:
     """
-    Finalize ONLY after all 3 intent questions have been answered.
+    Finalize ONLY after all 4 intent questions have been answered.
     Majority vote:
-      - If any two match → that theme
-      - If all three different → 'mixed'
+      - If any two or more match → that theme
+      - If all different → 'mixed'
     """
+    from collections import Counter
 
-    # --- CASE 1: Haven't reached question 3 yet ---
-    if not theme_3 or theme_3 == "":
+    # --- CASE 1: Haven't reached question 4 yet ---
+    if not theme_4 or theme_4 == "":
         return False, ""
 
-    # --- CASE 2: We HAVE 3 answers, finalize ALWAYS ---
-    # Majority logic
-    if theme_1 == theme_2:
-        return True, theme_1
-    elif theme_1 == theme_3:
-        return True, theme_1
-    elif theme_2 == theme_3:
-        return True, theme_2
-    else:
-        return True, "mixed"
+    # --- CASE 2: We HAVE 4 answers, finalize ALWAYS ---
+    themes = [theme_1, theme_2, theme_3, theme_4]
+
+    # Filter out empty/unsure for counting
+    valid_themes = [t for t in themes if t and t != "unsure"]
+
+    if not valid_themes:
+        return True, "unsure"
+
+    # Count occurrences
+    counts = Counter(valid_themes)
+    most_common = counts.most_common(1)[0]
+
+    # If we have a clear majority (appears 2+ times)
+    if most_common[1] >= 2:
+        return True, most_common[0]
+
+    # All different → mixed
+    return True, "mixed"
 
 
-def get_user_chosen_emotional_tone(user_input: str, options: List[str], emotional_mapping: List[str]) -> str:
+def get_user_chosen_act_2(user_input: str, options: List[str], act_2_emotional_mapping: List[str]) -> str:
     """
     Determine which emotional tone the user chose based on their input.
 
     Args:
         user_input: The user's answer text
         options: List of 4 option texts
-        emotional_mapping: List of 4 emotional tone categories corresponding to options
+        act_2_emotional_mapping: List of 4 emotional tone categories corresponding to options
 
     Returns:
         The emotional tone category the user selected
     """
-    if not emotional_mapping or len(emotional_mapping) != 4:
-        print(f"WARNING - get_user_chosen_emotional_tone: invalid emotional_mapping: {emotional_mapping}")
+    if not act_2_emotional_mapping or len(act_2_emotional_mapping) != 4:
+        print(f"WARNING - get_user_chosen_act_2: invalid act_2_emotional_mapping: {act_2_emotional_mapping}")
         return "unsure"
 
     if not options or len(options) != 4:
-        print(f"WARNING - get_user_chosen_emotional_tone: invalid options: {options}")
+        print(f"WARNING - get_user_chosen_act_2: invalid options: {options}")
         return "unsure"
 
     user_lower = user_input.lower().strip()
@@ -573,156 +594,197 @@ def get_user_chosen_emotional_tone(user_input: str, options: List[str], emotiona
         option_lower = option.lower().strip()
         # Exact match or significant overlap
         if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
-            return emotional_mapping[i]
+            return act_2_emotional_mapping[i]
 
     # Fallback: couldn't determine
-    print(f"WARNING - get_user_chosen_emotional_tone: couldn't match '{user_input}' to options")
+    print(f"WARNING - get_user_chosen_act_2: couldn't match '{user_input}' to options")
     return "unsure"
 
 
-def compute_final_emotional_tone(emo_tone_1: str, emo_tone_2: str) -> str:
+def compute_final_act_2(act_2_emo_1: str, act_2_emo_2: str, act_2_emo_3: str, act_2_emo_4: str) -> str:
     """
-    Determine the final emotional tone from 2 answers.
+    Determine the final emotional tone from 4 answers.
 
-    Logic:
-    1. If both answers are the same tone → use that tone
-    2. If one is "unsure" → use the other tone
-    3. If both are "unsure" → final tone is "unsure"
-    4. If both are different (and neither is unsure) → final tone is "mixed"
+    Logic (similar to Act 1):
+    1. If 2+ answers are "unsure" → "unsure"
+    2. If same tone appears 2+ times → that tone
+    3. If tie (2 tones with 2 votes each) → use most recent
+    4. If all different → "mixed"
 
     Args:
-        emo_tone_1: Emotional tone from Q1
-        emo_tone_2: Emotional tone from Q2
+        act_2_emo_1: Emotional tone from Q1
+        act_2_emo_2: Emotional tone from Q2
+        act_2_emo_3: Emotional tone from Q3
+        act_2_emo_4: Emotional tone from Q4
 
     Returns:
         Final emotional tone category
     """
+    from collections import Counter
+
     # Normalize inputs
-    tone_1 = (emo_tone_1 or "").lower().strip()
-    tone_2 = (emo_tone_2 or "").lower().strip()
+    tones = [
+        (act_2_emo_1 or "").lower().strip(),
+        (act_2_emo_2 or "").lower().strip(),
+        (act_2_emo_3 or "").lower().strip(),
+        (act_2_emo_4 or "").lower().strip()
+    ]
 
-    # If either is missing, return unsure
-    if not tone_1 or not tone_2:
+    # If any are missing, return unsure
+    if not all(tones):
         return "unsure"
 
-    # RULE 1: Both answers are the same → use that tone
-    if tone_1 == tone_2:
-        return tone_1
-
-    # RULE 2: One is "unsure" → use the other tone
-    if tone_1 == "unsure" and tone_2 != "unsure":
-        return tone_2
-    if tone_2 == "unsure" and tone_1 != "unsure":
-        return tone_1
-
-    # RULE 3: Both are "unsure" → final is "unsure"
-    if tone_1 == "unsure" and tone_2 == "unsure":
+    # RULE 1: If 2+ answers are "unsure" → "unsure"
+    unsure_count = sum(1 for t in tones if t == "unsure")
+    if unsure_count >= 2:
         return "unsure"
 
-    # RULE 4: Both are different (neither is unsure) → "mixed"
+    # Filter out empty and unsure
+    filtered = [t for t in tones if t and t != "unsure"]
+
+    if not filtered:
+        return "unsure"
+
+    # RULE 2: Count occurrences
+    counts = Counter(filtered)
+    max_count = max(counts.values())
+
+    # If we have a clear winner (appears 2+ times)
+    if max_count >= 2:
+        candidates = [t for t, c in counts.items() if c == max_count]
+
+        # Tiebreaker: prefer most recent
+        # Priority order: act_2_emo_4 > act_2_emo_3 > act_2_emo_2 > act_2_emo_1
+        priority_order = [tones[3], tones[2], tones[1], tones[0]]
+        for p in priority_order:
+            if p in candidates:
+                return p
+
+        # Fallback
+        return candidates[0]
+
+    # RULE 3: All different → "mixed"
     return "mixed"
 
 
-def should_finalize_emotional_tone(emo_tone_1: str, emo_tone_2: str) -> Tuple[bool, str]:
+def should_finalize_act_2(act_2_emo_1: str, act_2_emo_2: str, act_2_emo_3: str, act_2_emo_4: str) -> Tuple[bool, str]:
     """
     Determine if emotional tone assessment is complete and what the final tone is.
 
     Args:
-        emo_tone_1: User's emotional tone from Q1
-        emo_tone_2: User's emotional tone from Q2
+        act_2_emo_1: User's emotional tone from Q1
+        act_2_emo_2: User's emotional tone from Q2
+        act_2_emo_3: User's emotional tone from Q3
+        act_2_emo_4: User's emotional tone from Q4
 
     Returns:
         Tuple of (should_finalize, final_tone)
-        - should_finalize: True if we have 2 answers
+        - should_finalize: True if we have 4 answers
         - final_tone: The determined emotional tone
     """
-    # Need both answers to finalize
-    if not emo_tone_1 or not emo_tone_2:
+    # Need all 2 answers to finalize
+    if not act_2_emo_4 or act_2_emo_4 == "":  # ← CORRECT: act_2_emo_4
         return (False, "")
 
     # We have 2 answers, time to finalize
     # Call the logic function to determine final tone
-    final_tone = compute_final_emotional_tone(emo_tone_1, emo_tone_2)
+    final_tone = compute_final_act_2(act_2_emo_1, act_2_emo_2, act_2_emo_3, act_2_emo_4)
 
     return (True, final_tone)
 
-
-def update_intent_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+def update_act_1_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
     """
     Update intent metadata after user answers, BEFORE the agent runs again.
 
     This function:
-    1. Classifies the user's answer using stored intent_mapping
+    1. Classifies the user's answer using stored option_mapping
     2. Updates theme_1, theme_2, or theme_3 based on current turn
     3. Checks if intent should be finalized
-    4. Updates confirm_intent and intent_type
+    4. Updates confirm_act_1 and act_1_type
     """
     import copy
 
     # Deep copy to avoid mutations
     stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
-    intent_block = stage_meta.get("connection_intent", {}) or {}
-    intent_state = dict(intent_block.get("state", {}) or {})
-    intent_meta = dict(intent_block.get("metadata", {}) or {})
+    act_1_block = stage_meta.get("act_1", {}) or {}
+    act_1_state = dict(act_1_block.get("state", {}) or {})
+    act_1_meta = dict(act_1_block.get("metadata", {}) or {})
 
     # Get stored mapping from previous agent run
-    prev_intent_mapping = intent_state.get("intent_mapping", [])
-    prev_options = intent_state.get("options", [])
+    prev_option_mapping = act_1_state.get("option_mapping", [])
+    prev_options = act_1_state.get("options", [])
 
     # Get current turn (which question did they just answer?)
-    current_turn = intent_state.get("turn", 0)
+    current_turn = act_1_state.get("turn", 0)
 
     # Only process if we have a mapping and the user actually answered
-    if not prev_intent_mapping or not user_answer:
+    if not prev_option_mapping or not user_answer:
         return state
 
     # Classify the user's answer
-    chosen_intent = get_user_chosen_intent(user_answer, prev_options, prev_intent_mapping)
+    chosen_act_1 = get_user_chosen_act_1(user_answer, prev_options, prev_option_mapping)
 
     print(
-        f"DEBUG - update_intent_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_intent='{chosen_intent}'")
+        f"DEBUG - update_act_1_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_act_1='{chosen_act_1}'")
 
     # Update theme based on which question they just answered
     if current_turn == 1:
         # They just answered Q1
-        intent_state["theme_1"] = chosen_intent
-        intent_state["last_theme"] = chosen_intent
+        act_1_state["theme_1"] = chosen_act_1
+        act_1_state["last_theme"] = chosen_act_1
     elif current_turn == 2:
         # They just answered Q2
-        intent_state["theme_2"] = chosen_intent
-        intent_state["last_theme"] = chosen_intent
+        act_1_state["theme_2"] = chosen_act_1
+        act_1_state["last_theme"] = chosen_act_1
     elif current_turn == 3:
         # They just answered Q3
-        intent_state["theme_3"] = chosen_intent
-        intent_state["last_theme"] = chosen_intent
+        act_1_state["theme_3"] = chosen_act_1
+        act_1_state["last_theme"] = chosen_act_1
+    elif current_turn == 4:
+        # They just answered Q4
+        act_1_state["theme_4"] = chosen_act_1
+        act_1_state["last_theme"] = chosen_act_1
 
-    # Get all three themes
-    theme_1 = intent_state.get("theme_1", "")
-    theme_2 = intent_state.get("theme_2", "")
-    theme_3 = intent_state.get("theme_3", "")
+    # Get all four themes
+    theme_1 = act_1_state.get("theme_1", "")
+    theme_2 = act_1_state.get("theme_2", "")
+    theme_3 = act_1_state.get("theme_3", "")
+    theme_4 = act_1_state.get("theme_4", "")
 
     # Get ad_theme for finalization logic
     ad_data = state.get("ad_data", {}) or {}
     ad_theme = ad_data.get("ad_theme", "")
 
-    # Check if we should finalize (after 3 questions)
-    should_finalize, intent_type = should_finalize_intent(theme_1, theme_2, theme_3, ad_theme)
+    # Check if we should finalize (after 4 questions)
+    should_finalize, act_1_type = should_finalize_act_1(theme_1, theme_2, theme_3, theme_4, ad_theme)
 
-    print(f"DEBUG - should_finalize={should_finalize}, intent_type='{intent_type}'")
+    print(f"DEBUG - should_finalize={should_finalize}, act_1_type='{act_1_type}'")
 
     if should_finalize:
-        # We're done with intent questions
-        intent_meta["confirm_intent"] = "clear"
-        intent_meta["intent_type"] = intent_type
+        # We're done with intent questions - finalize
+        act_1_meta["confirm_act_1"] = "clear"
+        act_1_meta["act_1_type"] = act_1_type
     else:
-        # Keep asking questions
-        intent_meta["confirm_intent"] = "unclear"
-        intent_meta["intent_type"] = ""
+        # Still asking questions - but update act_1_type progressively
+        act_1_meta["confirm_act_1"] = "unclear"
+
+        # PROGRESSIVE UPDATE: Set act_1_type based on what we know so far
+        if current_turn >= 3 and theme_3:
+            # After Q3 (identity question), set act_1_type to theme_3
+            # This gives Act 2 the identity context immediately
+            act_1_meta["act_1_type"] = theme_3
+        elif current_turn >= 2 and theme_2:
+            # After Q2 (focused aspiration), set to theme_2
+            act_1_meta["act_1_type"] = theme_2
+        elif current_turn >= 1 and theme_1:
+            # After Q1 (broad aspiration), set to theme_1
+            act_1_meta["act_1_type"] = theme_1
+        # If no themes yet, leave act_1_type as is (don't clear it)
 
     # Write back the updated metadata and state
-    stage_meta["connection_intent"] = {
-        "metadata": intent_meta,
-        "state": intent_state,
+    stage_meta["act_1"] = {
+        "metadata": act_1_meta,
+        "state": act_1_state,
     }
 
     return {
@@ -731,44 +793,48 @@ def update_intent_metadata_after_answer(state: AgentState, user_answer: str) -> 
     }
 
 
-def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+def update_act_2_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
     """
     Update emotional tone metadata after user answers, BEFORE the agent runs again.
 
     This function:
-    1. Classifies the user's answer using stored emotional_mapping OR scale_mapping
-    2. Updates emo_tone_1 or emo_tone_2 based on current turn
+    1. Classifies the user's answer using stored act_2_emotional_mapping OR scale_mapping
+    2. Updates act_2_emo_1 or act_2_emo_2 based on current turn
     3. Checks if emotional tone should be finalized
-    4. Updates confirm_tone and emo_tone
+    4. Updates confirm_act_2 and act_2_emo_tone
     """
     import copy
 
     # Deep copy to avoid mutations
     stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
-    tone_block = stage_meta.get("emotional_tone", {}) or {}
-    tone_state = dict(tone_block.get("state", {}) or {})
-    tone_meta = dict(tone_block.get("metadata", {}) or {})
+    act_2_block = stage_meta.get("act_2", {}) or {}
+    act_2_state = dict(act_2_block.get("state", {}) or {})
+    act_2_meta = dict(act_2_block.get("metadata", {}) or {})
 
     # Get current turn (which question did they just answer?)
-    current_turn = tone_state.get("turn", 0)
+    current_turn = act_2_state.get("turn", 0)
 
     if not user_answer or current_turn == 0:
         return state
-
     # Determine which format was used for this question
     if current_turn == 1:
-        response_format = tone_state.get("response_format_1", "multiple_choice")
+        response_format = act_2_state.get("response_format_1", "multiple_choice")
     elif current_turn == 2:
-        response_format = tone_state.get("response_format_2", "multiple_choice")
+        response_format = act_2_state.get("response_format_2", "multiple_choice")
+    elif current_turn == 3:
+        response_format = act_2_state.get("response_format_3", "multiple_choice")
+    elif current_turn == 4:
+        response_format = act_2_state.get("response_format_4", "multiple_choice")
     else:
         response_format = "multiple_choice"
 
+
     # Classify the user's answer based on format
-    chosen_tone = ""
+    chosen_act_2 = ""
 
     if response_format == "scale":
         # For scale questions, use scale_mapping
-        scale_mapping = tone_state.get("scale_mapping", {})
+        scale_mapping = act_2_state.get("scale_mapping", {})
         if scale_mapping and user_answer.isdigit():
             scale_value = int(user_answer)
 
@@ -777,81 +843,93 @@ def update_emotional_tone_metadata_after_answer(state: AgentState, user_answer: 
                 if "-" in range_str:
                     min_val, max_val = map(int, range_str.split("-"))
                     if min_val <= scale_value <= max_val:
-                        chosen_tone = category
+                        chosen_act_2 = category
                         break
                 elif range_str.isdigit() and int(range_str) == scale_value:
                     # Exact match (e.g., "3": "neutral")
-                    chosen_tone = category
+                    chosen_act_2 = category
                     break
     else:
-        # For multiple_choice and yes_no, use emotional_mapping
-        prev_emotional_mapping = tone_state.get("emotional_mapping", [])
-        prev_options = tone_state.get("options", [])
+        # For multiple_choice and yes_no, use act_2_emotional_mapping
+        prev_act_2_emotional_mapping = act_2_state.get("act_2_emotional_mapping", [])
+        prev_options = act_2_state.get("options", [])
 
         # Filter out empty strings from padding
-        prev_emotional_mapping = [m for m in prev_emotional_mapping if m]
+        prev_act_2_emotional_mapping = [m for m in prev_act_2_emotional_mapping if m]
         prev_options = [o for o in prev_options if o]
 
-        if prev_emotional_mapping and prev_options:
-            chosen_tone = get_user_chosen_emotional_tone(user_answer, prev_options, prev_emotional_mapping)
+        if prev_act_2_emotional_mapping and prev_options:
+            chosen_act_2 = get_user_chosen_act_2(user_answer, prev_options, prev_act_2_emotional_mapping)
 
     print(
-        f"DEBUG - update_emotional_tone_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_tone='{chosen_tone}'")
+        f"DEBUG - update_emotional_act_2_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_act_2='{chosen_act_2}'")
 
-    # Update emo_tone based on which question they just answered
+    # Update act_2_emo_tone based on which question they just answered
     if current_turn == 1:
         # They just answered Q1
-        tone_state["emo_tone_1"] = chosen_tone
+        act_2_state["act_2_emo_1"] = chosen_act_2
+        act_2_state["last_theme"] = chosen_act_2
     elif current_turn == 2:
         # They just answered Q2
-        tone_state["emo_tone_2"] = chosen_tone
+        act_2_state["act_2_emo_2"] = chosen_act_2
+        act_2_state["last_theme"] = chosen_act_2
+    elif current_turn == 3:
+        # They just answered Q3
+        act_2_state["act_2_emo_3"] = chosen_act_2
+        act_2_state["last_theme"] = chosen_act_2
+    elif current_turn == 4:
+        # They just answered Q4
+        act_2_state["act_2_emo_4"] = chosen_act_2
+        act_2_state["last_theme"] = chosen_act_2
 
-    # Get both tones
-    emo_tone_1 = tone_state.get("emo_tone_1", "")
-    emo_tone_2 = tone_state.get("emo_tone_2", "")
+    # Get all four tones
+    act_2_emo_1 = act_2_state.get("act_2_emo_1", "")
+    act_2_emo_2 = act_2_state.get("act_2_emo_2", "")
+    act_2_emo_3 = act_2_state.get("act_2_emo_3", "")
+    act_2_emo_4 = act_2_state.get("act_2_emo_4", "")
 
-    # Check if we should finalize (after 2 questions)
-    should_finalize, final_tone = should_finalize_emotional_tone(emo_tone_1, emo_tone_2)
+    # Check if we should finalize (after 4 questions)
+    should_finalize, final_tone = should_finalize_act_2(act_2_emo_1, act_2_emo_2, act_2_emo_3, act_2_emo_4)
 
     print(f"DEBUG - should_finalize={should_finalize}, final_tone='{final_tone}'")
 
     if should_finalize:
         # We're done with emotional tone questions
-        tone_meta["confirm_tone"] = "clear"
-        tone_meta["emo_tone"] = final_tone
+        act_2_meta["confirm_act_2"] = "clear"
+        act_2_meta["act_2_emo_tone"] = final_tone
     else:
         # Keep asking questions
-        tone_meta["confirm_tone"] = "unclear"
-        tone_meta["emo_tone"] = "unclear"
+        act_2_meta["confirm_act_2"] = "unclear"
+        act_2_meta["act_2_emo_tone"] = "unclear"
 
     # Write back the updated metadata and state
-    stage_meta["emotional_tone"] = {
-        "metadata": tone_meta,
-        "state": tone_state,
+    stage_meta["act_2"] = {
+        "metadata": act_2_meta,
+        "state": act_2_state,
     }
 
     return {
         **state,
         "stage_meta": stage_meta,
     }
-def get_user_chosen_motivation(user_input: str, options: List[str], motivation_mapping: List[str]) -> str:
+def get_user_chosen_act_3(user_input: str, options: List[str], act_3_mapping: List[str]) -> str:
     """
     Determine which motivation the user chose based on their input.
 
     Args:
         user_input: The user's answer text
         options: List of 4 option texts
-        motivation_mapping: List of 4 motivation categories corresponding to options
+        act_3_mapping: List of 4 motivation categories corresponding to options
 
     Returns:
         The motivation category the user selected
     """
-    if not motivation_mapping or len(motivation_mapping) != 4:
-        print(f"WARNING - get_user_chosen_motivation: invalid motivation_mapping: {motivation_mapping}")
+    if not act_3_mapping or len(act_3_mapping) != 4:
+        print(f"WARNING - get_user_chosen_act_3: invalid act_3_mapping: {act_3_mapping}")
         return "unsure"
 
     if not options or len(options) != 4:
-        print(f"WARNING - get_user_chosen_motivation: invalid options: {options}")
+        print(f"WARNING - get_user_chosen_act_3: invalid options: {options}")
         return "unsure"
 
     user_lower = user_input.lower().strip()
@@ -861,28 +939,28 @@ def get_user_chosen_motivation(user_input: str, options: List[str], motivation_m
         option_lower = option.lower().strip()
         # Exact match or significant overlap
         if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
-            return motivation_mapping[i]
+            return act_3_mapping[i]
 
     # Fallback: couldn't determine
-    print(f"WARNING - get_user_chosen_motivation: couldn't match '{user_input}' to options")
+    print(f"WARNING - get_user_chosen_act_3: couldn't match '{user_input}' to options")
     return "unsure"
 
 
-def compute_question_direction_motivation(motivation_1: str, motivation_2: str, motivation_3: str,
+def compute_question_direction_act_3(act_3_answer_1: str, act_3_answer_2: str, act_3_answer_3: str,
                                           current_turn: int) -> str:
     """
     Determine if next motivation question should be 'broad' or 'deep'.
 
     Logic (same as intent agent):
     - Turn 1: Always broad (exploring from intent)
-    - Turn 2: Deep if motivation_1 is clear and not unsure, broad otherwise
-    - Turn 3: Deep if motivation_1 == motivation_2 (consistent), broad if mixed or unsure
+    - Turn 2: Deep if act_3_answer_1 is clear and not unsure, broad otherwise
+    - Turn 3: Deep if act_3_answer_1 == act_3_answer_2 (consistent), broad if mixed or unsure
     - Turn 4: Deep if consistent pattern, broad if mixed
 
     Args:
-        motivation_1: User's motivation from Q1
-        motivation_2: User's motivation from Q2
-        motivation_3: User's motivation from Q3
+        act_3_answer_1: User's motivation from Q1
+        act_3_answer_2: User's motivation from Q2
+        act_3_answer_3: User's motivation from Q3
         current_turn: The question number we're about to ask (1-4)
 
     Returns:
@@ -892,23 +970,23 @@ def compute_question_direction_motivation(motivation_1: str, motivation_2: str, 
         return "broad"
 
     if current_turn == 2:
-        # We have motivation_1 now
-        if motivation_1 in ["unsure", ""]:
+        # We have act_3_answer_1 now
+        if act_3_answer_1 in ["unsure", ""]:
             return "broad"
         else:
             return "deep"  # User showed clear motivation in Q1
 
     if current_turn == 3:
-        # We have motivation_1 and motivation_2
-        if motivation_1 == motivation_2 and motivation_1 not in ["unsure", ""]:
+        # We have act_3_answer_1 and act_3_answer_2
+        if act_3_answer_1 == act_3_answer_2 and act_3_answer_1 not in ["unsure", ""]:
             return "deep"  # Consistent motivation
         else:
             return "broad"  # Mixed or unsure
 
     if current_turn == 4:
-        # We have motivation_1, motivation_2, and motivation_3
+        # We have act_3_answer_1, act_3_answer_2, and act_3_answer_3
         # Check for consistency
-        motivations = [motivation_1, motivation_2, motivation_3]
+        motivations = [act_3_answer_1, act_3_answer_2, act_3_answer_3]
         # Remove unsure/empty
         clear_motivations = [m for m in motivations if m and m != "unsure"]
 
@@ -922,9 +1000,28 @@ def compute_question_direction_motivation(motivation_1: str, motivation_2: str, 
 
     return "broad"  # Fallback
 
+def compute_question_direction_act_2(current_turn: int) -> str:
+    """
+    Determine if next question should be 'broad' or 'focused' for Act 2.
 
-def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3: str, motivation_4: str,
-                             intent_type: str) -> str:
+    Fixed pattern:
+    - Turn 1: broad (learning pattern)
+    - Turn 2: focused (learning pattern)
+    - Turn 3: broad (engagement pattern)
+    - Turn 4: focused (engagement pattern)
+    """
+    if current_turn == 1:
+        return "broad"
+    elif current_turn == 2:
+        return "focused"
+    elif current_turn == 3:
+        return "broad"
+    elif current_turn == 4:
+        return "focused"
+    else:
+        return "broad"  # Fallback
+def compute_final_motivation(act_3_answer_1: str, act_3_answer_2: str, act_3_answer_3: str, act_3_answer_4: str,
+                             act_1_type: str) -> str:
     """
     Determine the final motivation from 4 answers.
 
@@ -935,21 +1032,21 @@ def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3:
     4. If all different → "mixed"
 
     Args:
-        motivation_1: Motivation from Q1
-        motivation_2: Motivation from Q2
-        motivation_3: Motivation from Q3
-        motivation_4: Motivation from Q4
-        intent_type: User's intent (used as tiebreaker if needed)
+        act_3_answer_1: Motivation from Q1
+        act_3_answer_2: Motivation from Q2
+        act_3_answer_3: Motivation from Q3
+        act_3_answer_4: Motivation from Q4
+        act_1_type: User's intent (used as tiebreaker if needed)
 
     Returns:
         Final motivation category
     """
     # Normalize inputs
     motivations = [
-        (motivation_1 or "").lower().strip(),
-        (motivation_2 or "").lower().strip(),
-        (motivation_3 or "").lower().strip(),
-        (motivation_4 or "").lower().strip()
+        (act_3_answer_1 or "").lower().strip(),
+        (act_3_answer_2 or "").lower().strip(),
+        (act_3_answer_3 or "").lower().strip(),
+        (act_3_answer_4 or "").lower().strip()
     ]
 
     # If any are missing, return unsure
@@ -964,8 +1061,8 @@ def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3:
     # RULE 2: Count occurrences (similar to intent logic)
     from collections import Counter
 
-    # Include intent_type as a tiebreaker option
-    all_values = motivations + [intent_type.lower().strip()] if intent_type else motivations
+    # Include act_1_type as a tiebreaker option
+    all_values = motivations + [act_1_type.lower().strip()] if act_1_type else motivations
 
     # Filter out empty and unsure
     filtered = [m for m in motivations if m and m != "unsure"]
@@ -981,7 +1078,7 @@ def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3:
         candidates = [m for m, c in counts.items() if c == max_count]
 
         # Tiebreaker: prefer most recent
-        # Priority order: motivation_4 > motivation_3 > motivation_2 > motivation_1
+        # Priority order: act_3_answer_4 > act_3_answer_3 > act_3_answer_2 > act_3_answer_1
         priority_order = [motivations[3], motivations[2], motivations[1], motivations[0]]
         for p in priority_order:
             if p in candidates:
@@ -992,16 +1089,16 @@ def compute_final_motivation(motivation_1: str, motivation_2: str, motivation_3:
 
     # RULE 3: All different → "mixed"
     return "mixed"
-def should_finalize_motivation(motivation_1: str, motivation_2: str, motivation_3: str, motivation_4: str, intent_type: str) -> Tuple[bool, str]:
+def should_finalize_act_3(act_3_answer_1: str, act_3_answer_2: str, act_3_answer_3: str, act_3_answer_4: str, act_1_type: str) -> Tuple[bool, str]:
     """
     Determine if motivation assessment is complete and what the final motivation is.
 
     Args:
-        motivation_1: User's motivation from Q1
-        motivation_2: User's motivation from Q2
-        motivation_3: User's motivation from Q3
-        motivation_4: User's motivation from Q4
-        intent_type: User's intent type (for tiebreaker)
+        act_3_answer_1: User's motivation from Q1
+        act_3_answer_2: User's motivation from Q2
+        act_3_answer_3: User's motivation from Q3
+        act_3_answer_4: User's motivation from Q4
+        act_1_type: User's intent type (for tiebreaker)
 
     Returns:
         Tuple of (should_finalize, final_motivation)
@@ -1009,124 +1106,129 @@ def should_finalize_motivation(motivation_1: str, motivation_2: str, motivation_
         - final_motivation: The determined motivation type
     """
     # Need all 4 answers to finalize
-    if not motivation_4 or motivation_4 == "":
+    if not act_3_answer_4 or act_3_answer_4 == "":
         return (False, "")
 
     # We have 4 answers, time to finalize
     # Call the logic function to determine final motivation
-    final_motivation = compute_final_motivation(motivation_1, motivation_2, motivation_3, motivation_4, intent_type)
+    final_motivation = compute_final_motivation(act_3_answer_1, act_3_answer_2, act_3_answer_3, act_3_answer_4, act_1_type)
 
     return (True, final_motivation)
 
-def update_motivation_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+def update_act_3_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
     """
     Update motivation metadata after user answers, BEFORE the agent runs again.
 
     This function:
-    1. Classifies the user's answer using stored motivation_mapping
-    2. Updates motivation_1, motivation_2, motivation_3, or motivation_4 based on current turn
-    3. Updates last_motivation to most recent answer
+    1. Classifies the user's answer using stored act_3_mapping
+    2. Updates act_3_answer_1, act_3_answer_2, act_3_answer_3, or act_3_answer_4 based on current turn
+    3. Updates last_act_3 to most recent answer
     4. Checks if motivation should be finalized
-    5. Updates confirm_motivation and motivation_type
+    5. Updates confirm_act_3 and act_3_type
     """
     import copy
 
     # Deep copy to avoid mutations
     stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
-    motivation_block = stage_meta.get("motivation", {}) or {}
-    motivation_state = dict(motivation_block.get("state", {}) or {})
-    motivation_meta = dict(motivation_block.get("metadata", {}) or {})
+    act_3_block = stage_meta.get("act_3", {}) or {}
+    act_3_state = dict(act_3_block.get("state", {}) or {})
+    act_3_meta = dict(act_3_block.get("metadata", {}) or {})
 
     # Get stored mapping from previous agent run
-    prev_motivation_mapping = motivation_state.get("motivation_mapping", [])
-    prev_options = motivation_state.get("options", [])
+    prev_act_3_mapping = act_3_state.get("act_3_mapping", [])
+    prev_options = act_3_state.get("options", [])
 
     # Get current turn (which question did they just answer?)
-    current_turn = motivation_state.get("turn", 0)
+    current_turn = act_3_state.get("turn", 0)
 
     # Only process if we have a mapping and the user actually answered
-    if not prev_motivation_mapping or not user_answer:
+    if not prev_act_3_mapping or not user_answer:
         return state
 
     # Classify the user's answer
-    chosen_motivation = get_user_chosen_motivation(user_answer, prev_options, prev_motivation_mapping)
+    chosen_act_3 = get_user_chosen_act_3(user_answer, prev_options, prev_act_3_mapping)
 
     print(
-        f"DEBUG - update_motivation_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_motivation='{chosen_motivation}'")
+        f"DEBUG - update_act_3_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_act_3='{chosen_act_3}'")
 
+    # Update motivation based on which question they just answered
     # Update motivation based on which question they just answered
     if current_turn == 1:
         # They just answered Q1
-        motivation_state["motivation_1"] = chosen_motivation
-        motivation_state["last_motivation"] = chosen_motivation
+        act_3_state["act_3_answer_1"] = chosen_act_3
+        act_3_state["last_act_3"] = chosen_act_3
+        act_3_state["last_theme"] = chosen_act_3
     elif current_turn == 2:
         # They just answered Q2
-        motivation_state["motivation_2"] = chosen_motivation
-        motivation_state["last_motivation"] = chosen_motivation
+        act_3_state["act_3_answer_2"] = chosen_act_3
+        act_3_state["last_act_3"] = chosen_act_3
+        act_3_state["last_theme"] = chosen_act_3
     elif current_turn == 3:
         # They just answered Q3
-        motivation_state["motivation_3"] = chosen_motivation
-        motivation_state["last_motivation"] = chosen_motivation
+        act_3_state["act_3_answer_3"] = chosen_act_3
+        act_3_state["last_act_3"] = chosen_act_3
+        act_3_state["last_theme"] = chosen_act_3
     elif current_turn == 4:
         # They just answered Q4
-        motivation_state["motivation_4"] = chosen_motivation
-        motivation_state["last_motivation"] = chosen_motivation
+        act_3_state["act_3_answer_4"] = chosen_act_3
+        act_3_state["last_act_3"] = chosen_act_3
+        act_3_state["last_theme"] = chosen_act_3
 
     # Get all four motivations
-    motivation_1 = motivation_state.get("motivation_1", "")
-    motivation_2 = motivation_state.get("motivation_2", "")
-    motivation_3 = motivation_state.get("motivation_3", "")
-    motivation_4 = motivation_state.get("motivation_4", "")
+    act_3_answer_1 = act_3_state.get("act_3_answer_1", "")
+    act_3_answer_2 = act_3_state.get("act_3_answer_2", "")
+    act_3_answer_3 = act_3_state.get("act_3_answer_3", "")
+    act_3_answer_4 = act_3_state.get("act_3_answer_4", "")
 
-    # Get intent_type for finalization logic
-    intent_block = stage_meta.get("connection_intent", {}) or {}
-    intent_meta = intent_block.get("metadata", {}) or {}
-    intent_type = intent_meta.get("intent_type", "")
+    # Get act_1_type for finalization logic
+    act_1_block = stage_meta.get("act_1", {}) or {}
+    act_1_meta = act_1_block.get("metadata", {}) or {}
+    act_1_type = act_1_meta.get("act_1_type", "")
 
     # Check if we should finalize (after 4 questions)
-    should_finalize, final_motivation = should_finalize_motivation(
-        motivation_1, motivation_2, motivation_3, motivation_4, intent_type
+    should_finalize, final_motivation = should_finalize_act_3(
+        act_3_answer_1, act_3_answer_2, act_3_answer_3, act_3_answer_4, act_1_type
     )
 
     print(f"DEBUG - should_finalize={should_finalize}, final_motivation='{final_motivation}'")
 
     if should_finalize:
         # We're done with motivation questions
-        motivation_meta["confirm_motivation"] = "clear"
-        motivation_meta["motivation_type"] = final_motivation
+        act_3_meta["confirm_act_3"] = "clear"
+        act_3_meta["act_3_type"] = final_motivation
     else:
         # Keep asking questions
-        motivation_meta["confirm_motivation"] = "unclear"
-        motivation_meta["motivation_type"] = ""
+        act_3_meta["confirm_act_3"] = "unclear"
+        act_3_meta["act_3_type"] = ""
 
     # Write back the updated metadata and state
-    stage_meta["motivation"] = {
-        "metadata": motivation_meta,
-        "state": motivation_state,
+    stage_meta["act_3"] = {
+        "metadata": act_3_meta,
+        "state": act_3_state,
     }
 
     return {
         **state,
         "stage_meta": stage_meta,
     }
-def get_user_chosen_barrier(user_input: str, options: List[str], barriers_mapping: List[str]) -> str:
+def get_user_chosen_act_4(user_input: str, options: List[str], act_4_mapping: List[str]) -> str:
     """
     Determine which barrier the user chose based on their input.
 
     Args:
         user_input: The user's answer text
         options: List of 4 option texts
-        barriers_mapping: List of 4 barrier categories corresponding to options
+        act_4_mapping: List of 4 barrier categories corresponding to options
 
     Returns:
         The barrier category the user selected
     """
-    if not barriers_mapping or len(barriers_mapping) != 4:
-        print(f"WARNING - get_user_chosen_barrier: invalid barriers_mapping: {barriers_mapping}")
+    if not act_4_mapping or len(act_4_mapping) != 4:
+        print(f"WARNING - get_user_chosen_act_4: invalid act_4_mapping: {act_4_mapping}")
         return "unsure"
 
     if not options or len(options) != 4:
-        print(f"WARNING - get_user_chosen_barrier: invalid options: {options}")
+        print(f"WARNING - get_user_chosen_act_4: invalid options: {options}")
         return "unsure"
 
     user_lower = user_input.lower().strip()
@@ -1136,70 +1238,47 @@ def get_user_chosen_barrier(user_input: str, options: List[str], barriers_mappin
         option_lower = option.lower().strip()
         # Exact match or significant overlap
         if user_lower == option_lower or user_lower in option_lower or option_lower in user_lower:
-            return barriers_mapping[i]
+            return act_4_mapping[i]
 
     # Fallback: couldn't determine
-    print(f"WARNING - get_user_chosen_barrier: couldn't match '{user_input}' to options")
+    print(f"WARNING - get_user_chosen_act_4: couldn't match '{user_input}' to options")
     return "unsure"
-
-def compute_question_direction_barriers(barrier_1: str, barrier_2: str, barrier_3: str,
+def compute_question_direction_act_4(act_4_answer_1: str,
                                         current_turn: int) -> str:
     """
-    Determine if next barrier question should be 'broad' or 'deep'.
+    Determine if next barrier question should be 'broad' or 'focused'.
 
-    Logic (same as motivation and intent agents):
-    - Turn 1: Always broad (exploring from motivation)
-    - Turn 2: Deep if barrier_1 is clear and not unsure, broad otherwise
-    - Turn 3: Deep if barrier_1 == barrier_2 (consistent), broad if mixed or unsure
-    - Turn 4: Deep if consistent pattern, broad if mixed
+    Logic:
+    - Turn 1: Always broad (exploring support needs)
+    - Turn 2: Focused if act_4_answer_1 is clear and not unsure, broad otherwise
 
     Args:
-        barrier_1: User's barrier from Q1
-        barrier_2: User's barrier from Q2
-        barrier_3: User's barrier from Q3
-        current_turn: The question number we're about to ask (1-4)
+        act_4_answer_1: User's support preference from Q1
+        current_turn: The question number we're about to ask (1-2)
 
     Returns:
-        "broad" or "deep"
+        "broad" or "focused"
     """
     if current_turn == 1:
         return "broad"
 
     if current_turn == 2:
-        # We have barrier_1 now
-        if barrier_1 in ["unsure", ""]:
+        # We have act_4_answer_1 now
+        if act_4_answer_1 in ["unsure", ""]:
             return "broad"
         else:
-            return "deep"  # User showed clear barrier in Q1
+            return "focused"  # User showed clear support preference in Q1
 
-    if current_turn == 3:
-        # We have barrier_1 and barrier_2
-        if barrier_1 == barrier_2 and barrier_1 not in ["unsure", ""]:
-            return "deep"  # Consistent barrier
-        else:
-            return "broad"  # Mixed or unsure
+    # Only 2 questions - default to broad as fallback
+    return "broad"
 
-    if current_turn == 4:
-        # We have barrier_1, barrier_2, and barrier_3
-        # Check for consistency
-        barriers = [barrier_1, barrier_2, barrier_3]
-        # Remove unsure/empty
-        clear_barriers = [b for b in barriers if b and b != "unsure"]
 
-        if len(clear_barriers) >= 2:
-            # Check if at least 2 are the same
-            if clear_barriers[0] == clear_barriers[-1] or (
-                    len(clear_barriers) >= 2 and clear_barriers[0] == clear_barriers[1]):
-                return "deep"
 
-        return "broad"
 
-    return "broad"  # Fallback
-
-def compute_final_barrier(barrier_1: str, barrier_2: str, barrier_3: str, barrier_4: str,
-                         motivation_type: str) -> str:
+def compute_final_barrier(act_4_answer_1: str, act_4_answer_2: str,
+                         act_3_type: str) -> str:
     """
-    Determine the final barrier from 4 answers.
+    Determine the final barrier from 2 answers.
 
     Logic:
     1. If 2+ answers are "unsure" → "unsure"
@@ -1208,21 +1287,17 @@ def compute_final_barrier(barrier_1: str, barrier_2: str, barrier_3: str, barrie
     4. If all different → "mixed"
 
     Args:
-        barrier_1: Barrier from Q1
-        barrier_2: Barrier from Q2
-        barrier_3: Barrier from Q3
-        barrier_4: Barrier from Q4
-        motivation_type: User's motivation (used as tiebreaker if needed)
+        act_4_answer_1: Barrier from Q1
+        act_4_answer_2: Barrier from Q2
+        act_3_type: User's motivation (used as tiebreaker if needed)
 
     Returns:
         Final barrier category
     """
     # Normalize inputs
     barriers = [
-        (barrier_1 or "").lower().strip(),
-        (barrier_2 or "").lower().strip(),
-        (barrier_3 or "").lower().strip(),
-        (barrier_4 or "").lower().strip()
+        (act_4_answer_1 or "").lower().strip(),
+        (act_4_answer_2 or "").lower().strip()
     ]
 
     # If any are missing, return unsure
@@ -1251,29 +1326,31 @@ def compute_final_barrier(barrier_1: str, barrier_2: str, barrier_3: str, barrie
         candidates = [b for b, c in counts.items() if c == max_count]
 
         # Tiebreaker: prefer most recent
-        # Priority order: barrier_4 > barrier_3 > barrier_2 > barrier_1
-        priority_order = [barriers[3], barriers[2], barriers[1], barriers[0]]
+        # Priority order: act_4_answer_2 > act_4_answer_1
+        priority_order = [barriers[1], barriers[0]]
         for p in priority_order:
             if p in candidates:
                 return p
 
         # Fallback
         return candidates[0]
+    # RULE 3: Both different → use most recent (answer_2)
+    if barriers[1]:
+        return barriers[1]
+    return barriers[0] if barriers[0] else "unsure"
 
-    # RULE 3: All different → "mixed"
-    return "mixed"
 
-def should_finalize_barriers(barrier_1: str, barrier_2: str, barrier_3: str, barrier_4: str,
-                            motivation_type: str) -> Tuple[bool, str]:
+def should_finalize_act_4(act_4_answer_1: str, act_4_answer_2: str, act_4_answer_3: str, act_4_answer_4: str,
+                            act_3_type: str) -> Tuple[bool, str]:
     """
     Determine if barriers assessment is complete and what the final barrier is.
 
     Args:
-        barrier_1: User's barrier from Q1
-        barrier_2: User's barrier from Q2
-        barrier_3: User's barrier from Q3
-        barrier_4: User's barrier from Q4
-        motivation_type: User's motivation type (for tiebreaker)
+        act_4_answer_1: User's barrier from Q1
+        act_4_answer_2: User's barrier from Q2
+        act_4_answer_3: User's barrier from Q3
+        act_4_answer_4: User's barrier from Q4
+        act_3_type: User's motivation type (for tiebreaker)
 
     Returns:
         Tuple of (should_finalize, final_barrier)
@@ -1281,99 +1358,91 @@ def should_finalize_barriers(barrier_1: str, barrier_2: str, barrier_3: str, bar
         - final_barrier: The determined barrier type
     """
     # Need all 4 answers to finalize
-    if not barrier_4 or barrier_4 == "":
+    if not act_4_answer_2 or act_4_answer_2 == "":
         return (False, "")
 
     # We have 4 answers, time to finalize
     # Call the logic function to determine final barrier
-    final_barrier = compute_final_barrier(barrier_1, barrier_2, barrier_3, barrier_4, motivation_type)
+    final_barrier = compute_final_barrier(act_4_answer_1, act_4_answer_2, act_3_type)
 
     return (True, final_barrier)
-def update_barriers_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
+def update_act_4_metadata_after_answer(state: AgentState, user_answer: str) -> AgentState:
     """
     Update barriers metadata after user answers, BEFORE the agent runs again.
 
     This function:
-    1. Classifies the user's answer using stored barriers_mapping
-    2. Updates barrier_1, barrier_2, barrier_3, or barrier_4 based on current turn
-    3. Updates last_barrier to most recent answer
+    1. Classifies the user's answer using stored act_4_mapping
+    2. Updates act_4_answer_1, act_4_answer_2, act_4_answer_3, or act_4_answer_4 based on current turn
+    3. Updates last_act_4 to most recent answer
     4. Checks if barriers should be finalized
-    5. Updates confirm_barriers and barrier_type
+    5. Updates confirm_act_4 and act_4_type
     """
     import copy
 
     # Deep copy to avoid mutations
     stage_meta = copy.deepcopy(state.get("stage_meta", {}) or {})
-    barriers_block = stage_meta.get("barriers", {}) or {}
-    barriers_state = dict(barriers_block.get("state", {}) or {})
-    barriers_meta = dict(barriers_block.get("metadata", {}) or {})
+    act_4_block = stage_meta.get("act_4", {}) or {}
+    act_4_state = dict(act_4_block.get("state", {}) or {})
+    act_4_meta = dict(act_4_block.get("metadata", {}) or {})
 
     # Get stored mapping from previous agent run
-    prev_barriers_mapping = barriers_state.get("barriers_mapping", [])
-    prev_options = barriers_state.get("options", [])
+    prev_act_4_mapping = act_4_state.get("act_4_mapping", [])
+    prev_options = act_4_state.get("options", [])
 
     # Get current turn (which question did they just answer?)
-    current_turn = barriers_state.get("turn", 0)
+    current_turn = act_4_state.get("turn", 0)
 
     # Only process if we have a mapping and the user actually answered
-    if not prev_barriers_mapping or not user_answer:
+    if not prev_act_4_mapping or not user_answer:
         return state
 
     # Classify the user's answer
-    chosen_barrier = get_user_chosen_barrier(user_answer, prev_options, prev_barriers_mapping)
+    chosen_act_4 = get_user_chosen_act_4(user_answer, prev_options, prev_act_4_mapping)
 
     print(
-        f"DEBUG - update_barriers_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_barrier='{chosen_barrier}'")
+        f"DEBUG - update_act_4_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_act_4='{chosen_act_4}'")
 
     # Update barrier based on which question they just answered
+    # Update barrier based on which question they just answered
+    # Update support preference based on which question they just answered
     if current_turn == 1:
-        # They just answered Q1
-        barriers_state["barrier_1"] = chosen_barrier
-        barriers_state["last_barrier"] = chosen_barrier
+        act_4_state["act_4_answer_1"] = chosen_act_4
+        act_4_state["last_act_4"] = chosen_act_4
+        act_4_state["last_theme"] = chosen_act_4
     elif current_turn == 2:
-        # They just answered Q2
-        barriers_state["barrier_2"] = chosen_barrier
-        barriers_state["last_barrier"] = chosen_barrier
-    elif current_turn == 3:
-        # They just answered Q3
-        barriers_state["barrier_3"] = chosen_barrier
-        barriers_state["last_barrier"] = chosen_barrier
-    elif current_turn == 4:
-        # They just answered Q4
-        barriers_state["barrier_4"] = chosen_barrier
-        barriers_state["last_barrier"] = chosen_barrier
+        act_4_state["act_4_answer_2"] = chosen_act_4
+        act_4_state["last_act_4"] = chosen_act_4
+        act_4_state["last_theme"] = chosen_act_4
 
-    # Get all four barriers
-    barrier_1 = barriers_state.get("barrier_1", "")
-    barrier_2 = barriers_state.get("barrier_2", "")
-    barrier_3 = barriers_state.get("barrier_3", "")
-    barrier_4 = barriers_state.get("barrier_4", "")
+    # Get both support preferences
+    act_4_answer_1 = act_4_state.get("act_4_answer_1", "")
+    act_4_answer_2 = act_4_state.get("act_4_answer_2", "")
 
-    # Get motivation_type for finalization logic
-    motivation_block = stage_meta.get("motivation", {}) or {}
-    motivation_meta = motivation_block.get("metadata", {}) or {}
-    motivation_type = motivation_meta.get("motivation_type", "")
+    # Get act_3_type for finalization logic
+    act_3_block = stage_meta.get("act_3", {}) or {}
+    act_3_meta = act_3_block.get("metadata", {}) or {}
+    act_3_type = act_3_meta.get("act_3_type", "")
 
-    # Check if we should finalize (after 4 questions)
-    should_finalize, final_barrier = should_finalize_barriers(
-        barrier_1, barrier_2, barrier_3, barrier_4, motivation_type
+    # Check if we should finalize (after 2 questions)
+    should_finalize, final_barrier = should_finalize_act_4(
+        act_4_answer_1, act_4_answer_2, "", "", act_3_type
     )
 
     print(f"DEBUG - should_finalize={should_finalize}, final_barrier='{final_barrier}'")
 
     if should_finalize:
         # We're done with barriers questions
-        barriers_meta["confirm_barriers"] = "clear"
-        barriers_meta["barrier_type"] = final_barrier
+        act_4_meta["confirm_act_4"] = "clear"
+        act_4_meta["act_4_type"] = final_barrier
     else:
         # Keep asking questions
-        barriers_meta["confirm_barriers"] = "unclear"
-        barriers_meta["barrier_type"] = ""
+        act_4_meta["confirm_act_4"] = "unclear"
+        act_4_meta["act_4_type"] = ""
 
     # Write back the updated metadata and state
-    stage_meta["barriers"] = {
-        "metadata": barriers_meta,
-        "state": barriers_state,
+    stage_meta["act_4"] = {
+        "metadata": act_4_meta,
+        "state": act_4_state,
     }
 
     return {
@@ -1433,7 +1502,7 @@ def compute_final_intent_from_state(
       - ad_theme: ad_data['ad_theme'] (may be "")
 
     Output:
-      - intent_type: one of "unsure", "self_expression", "wellness",
+      - act_1_type: one of "unsure", "self_expression", "wellness",
         "skill_growth", "ambition", "belonging", or "mixed".
     """
     theme_1 = state_block.get("theme_1", "") or ""
@@ -1506,7 +1575,7 @@ class BaseAgent(ABC):
     def build_context(self, state: AgentState, user_text: str) -> Dict[str, Any]:
         """Build context dictionary for template rendering."""
         stage_meta = state.get("stage_meta", {}) or {}
-        my_block = stage_meta.get(self.info_type, {}) or {}
+        my_block = stage_meta.get(self.name, {}) or {}
         my_meta = my_block.get("metadata", {}) or {}
         my_state = my_block.get("state", {}) or {}
 
@@ -1538,181 +1607,311 @@ class BaseAgent(ABC):
             "ad_theme": ad_data.get("ad_theme", ""),
         }
 
-        # FOR CONNECTION_INTENT AGENT: compute last_intent and question_direction
+        # FOR HOOK AGENT: provide ad context
+        if self.info_type == "hook":
+            ad_data = state.get("ad_data", {}) or {}
+            ctx["ad_theme"] = ad_data.get("ad_theme", "")
+            ctx["ad_description"] = ad_data.get("ad_description", "")
+            return ctx
+
+        # FOR CONNECTION_INTENT AGENT: compute last_act_1 and question_direction
         if self.info_type == "connection_intent":
             stage_meta = state.get("stage_meta", {}) or {}
-            intent_block = stage_meta.get("connection_intent", {}) or {}
-            intent_state = intent_block.get("state", {}) or {}
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_state = act_1_block.get("state", {}) or {}
 
-            current_turn = intent_state.get("turn", 0)
+            current_turn = act_1_state.get("turn", 0)
             ad_data = state.get("ad_data", {}) or {}
             ad_theme = ad_data.get("ad_theme", "")
 
-            theme_1 = intent_state.get("theme_1", "")
-            theme_2 = intent_state.get("theme_2", "")
-            last_theme = intent_state.get("last_theme", "")
+            theme_1 = act_1_state.get("theme_1", "")
+            theme_2 = act_1_state.get("theme_2", "")
+            last_theme = act_1_state.get("last_theme", "")
 
-            # Determine last_intent
+            # Determine last_act_1
             if current_turn == 0:
                 # First turn - use ad_theme
-                last_intent = ad_theme
+                last_act_1 = ad_theme
             else:
                 # Use last_theme if available, otherwise ad_theme
-                last_intent = last_theme if last_theme else ad_theme
+                last_act_1 = last_theme if last_theme else ad_theme
 
             # Compute question_direction
             question_direction = compute_question_direction(theme_1, theme_2, current_turn + 1)
 
-            ctx["last_intent"] = last_intent
-            ctx["question_direction"] = question_direction
+            # Determine focus_type based on turn number
+            # Turn 1: aspiration broad
+            # Turn 2: aspiration focused
+            # Turn 3: identity shift broad
+            # Turn 4: identity shift focused
+            if current_turn + 1 == 1:
+                focus_type = "aspiration"
+            elif current_turn + 1 == 2:
+                focus_type = "aspiration"
+            elif current_turn + 1 == 3:
+                focus_type = "identity"
+            elif current_turn + 1 == 4:
+                focus_type = "identity"
+            else:
+                focus_type = "aspiration"  # Fallback
+                # ADD THESE DEBUG LINES
+            print(f"🔍 DEBUG BUILD_CONTEXT:")
+            print(f"   current_turn = {current_turn}")
+            print(f"   next_turn (current_turn + 1) = {current_turn + 1}")
+            print(f"   question_direction = {question_direction}")
+            print(f"   focus_type = {focus_type}")
+            print(f"   last_theme = {last_act_1}")
 
-        # FOR EMOTIONAL_TONE AGENT: get last_intent from connection_intent results
+            ctx["last_theme"] = last_act_1
+            ctx["question_mode"] = question_direction
+            ctx["focus_type"] = focus_type
+
+            # FOR EMOTIONAL_TONE AGENT: get last_act_1 from connection_intent results
         if self.info_type == "emotional_tone":
             stage_meta = state.get("stage_meta", {}) or {}
 
             # Get the finalized intent from connection_intent agent
-            intent_block = stage_meta.get("connection_intent", {}) or {}
-            intent_meta = intent_block.get("metadata", {}) or {}
-            intent_state = intent_block.get("state", {}) or {}
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_meta = act_1_block.get("metadata", {}) or {}
+            act_1_state = act_1_block.get("state", {}) or {}
 
-            # Use the finalized intent_type, or fall back to last_theme, or ad_theme
-            intent_type = intent_meta.get("intent_type", "")
-            last_theme = intent_state.get("last_theme", "")
+            # Get Act 2 state
+            act_2_block = stage_meta.get("act_2", {}) or {}
+            act_2_state = act_2_block.get("state", {}) or {}
+            current_turn = act_2_state.get("turn", 0)
+
+            # Use the finalized act_1_type, or fall back to last_theme, or ad_theme
+            act_1_type = act_1_meta.get("act_1_type", "")
+            last_theme = act_1_state.get("last_theme", "")
             ad_data = state.get("ad_data", {}) or {}
             ad_theme = ad_data.get("ad_theme", "")
 
-            # Determine last_intent for emotional tone questions
-            if intent_type:
-                last_intent = intent_type  # Use finalized intent
+            # Determine last_act_1 for emotional tone questions
+            if act_1_type:
+                last_act_1 = act_1_type  # Use finalized intent
             elif last_theme:
-                last_intent = last_theme
+                last_act_1 = last_theme
             else:
-                last_intent = ad_theme
+                last_act_1 = ad_theme
 
-            ctx["last_intent"] = last_intent
+            ctx["last_act_1"] = last_act_1
 
-        # FOR MOTIVATION AGENT: compute last_motivation and question_direction
+            # Get act1_direction from Act 1 Q2 (focused aspiration)
+            theme_2 = act_1_state.get("theme_2", "")
+            act1_direction = theme_2 if theme_2 else ad_theme
+            ctx["act1_direction"] = act1_direction
+
+            # Compute question_direction for Act 2
+            question_direction = compute_question_direction_act_2(current_turn + 1)
+
+            # Determine focus_type based on turn number
+            # Turn 1: learning pattern broad
+            # Turn 2: learning pattern focused
+            # Turn 3: engagement pattern broad
+            # Turn 4: engagement pattern focused
+            if current_turn + 1 == 1:
+                focus_type = "learning"
+            elif current_turn + 1 == 2:
+                focus_type = "learning"
+            elif current_turn + 1 == 3:
+                focus_type = "engagement"
+            elif current_turn + 1 == 4:
+                focus_type = "engagement"
+            else:
+                focus_type = "learning"  # Fallback
+
+            ctx["question_mode"] = question_direction
+            ctx["focus_type"] = focus_type
+
+
+
+        # FOR MOTIVATION AGENT: compute last_act_3 and question_direction
         if self.info_type == "motivation":
+
+            act2_state = stage_meta.get("act_2", {}).get("state", {})
+
+            act2_emo_1 = act2_state.get("act_2_emo_1", "")
+            act2_emo_2 = act2_state.get("act_2_emo_2", "")
+            act2_emo_3 = act2_state.get("act_2_emo_3", "")
+            act2_emo_4 = act2_state.get("act_2_emo_4", "")
+
+            derived = self.compute_act2_fields(
+                act2_emo_1,
+                act2_emo_2,
+                act2_emo_3,
+                act2_emo_4
+            )
+
+            stage_meta.setdefault("act_3", {}).setdefault("state", {}).update(derived)
+            state["stage_meta"] = stage_meta
+
             stage_meta = state.get("stage_meta", {}) or {}
 
             # Get the finalized intent from connection_intent agent
-            intent_block = stage_meta.get("connection_intent", {}) or {}
-            intent_meta = intent_block.get("metadata", {}) or {}
-            intent_type = intent_meta.get("intent_type", "")
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_meta = act_1_block.get("metadata", {}) or {}
+            act_1_type = act_1_meta.get("act_1_type", "")
 
             # Get motivation state
-            motivation_block = stage_meta.get("motivation", {}) or {}
-            motivation_state = motivation_block.get("state", {}) or {}
+            act_3_block = stage_meta.get("act_3", {}) or {}
+            act_3_state = act_3_block.get("state", {}) or {}
 
-            current_turn = motivation_state.get("turn", 0)
+            current_turn = act_3_state.get("turn", 0)
 
-            motivation_1 = motivation_state.get("motivation_1", "")
-            motivation_2 = motivation_state.get("motivation_2", "")
-            motivation_3 = motivation_state.get("motivation_3", "")
-            last_motivation_state = motivation_state.get("last_motivation", "")
+            act_3_answer_1 = act_3_state.get("act_3_answer_1", "")
+            act_3_answer_2 = act_3_state.get("act_3_answer_2", "")
+            act_3_answer_3 = act_3_state.get("act_3_answer_3", "")
+            last_act_3_state = act_3_state.get("last_act_3", "")
 
-            # Determine last_motivation
+            # Determine last_act_3
             if current_turn == 0:
-                # First turn - use intent_type from intent agent
-                last_motivation = intent_type if intent_type else ""
+                # First turn - use act_1_type from intent agent
+                last_act_3 = act_1_type if act_1_type else ""
             else:
-                # Use last_motivation if available, otherwise intent_type
-                last_motivation = last_motivation_state if last_motivation_state else intent_type
+                # Use last_act_3 if available, otherwise act_1_type
+                last_act_3 = last_act_3_state if last_act_3_state else act_1_type
 
-            # Compute question_direction
-            question_direction = compute_question_direction_motivation(
-                motivation_1, motivation_2, motivation_3, current_turn + 1
-            )
+            # Get act_1 state for additional context
+            act_1_state = act_1_block.get("state", {}) or {}
+            act1_direction = act_1_state.get("theme_1", "")  # emotional direction from Act 1
+            act1_identity = act_1_state.get("theme_3", "")  # identity shift from Act 1
 
-            ctx["last_motivation"] = last_motivation
-            ctx["question_direction"] = question_direction
+            # Determine question_mode and focus_type based on turn number
+            # Turn 1: broad internal_fear
+            # Turn 2: focused internal_fear
+            # Turn 3: broad emotional_pattern
+            # Turn 4: focused emotional_pattern
+            if current_turn + 1 == 1:
+                question_mode = "broad"
+                focus_type = "internal_fear"
+            elif current_turn + 1 == 2:
+                question_mode = "focused"
+                focus_type = "internal_fear"
+            elif current_turn + 1 == 3:
+                question_mode = "broad"
+                focus_type = "emotional_pattern"
+            elif current_turn + 1 == 4:
+                question_mode = "focused"
+                focus_type = "emotional_pattern"
+            else:
+                question_mode = "broad"
+                focus_type = "internal_fear"  # Fallback
 
-            # FOR BARRIERS AGENT: compute last_barrier and question_direction
+            ctx["last_theme"] = last_act_3
+            ctx["question_mode"] = question_mode
+            ctx["focus_type"] = focus_type
+            ctx["act1_direction"] = act1_direction
+            ctx["act1_identity"] = act1_identity
         if self.info_type == "barriers":
             stage_meta = state.get("stage_meta", {}) or {}
 
             # Get the finalized motivation from motivation agent
-            motivation_block = stage_meta.get("motivation", {}) or {}
-            motivation_meta = motivation_block.get("metadata", {}) or {}
-            motivation_type = motivation_meta.get("motivation_type", "")
+            act_3_block = stage_meta.get("act_3", {}) or {}
+            act_3_meta = act_3_block.get("metadata", {}) or {}
+            act_3_type = act_3_meta.get("act_3_type", "")
+
+            # Get Act 1 identity for context
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_state = act_1_block.get("state", {}) or {}
+            act1_identity = act_1_state.get("theme_3", "")  # Identity from Q3
+
+            # Get Act 2 derived psychographic fields
+            act_2_block = stage_meta.get("act_2", {}) or {}
+            act_2_state = act_2_block.get("state", {}) or {}
+
+            act2_learning_style = act_2_state.get("act2_learning_style", "")
+            act2_engagement_style = act_2_state.get("act2_engagement_style", "")
+            act2_final_tone = act_2_state.get("act2_final_tone", "")
 
             # Get barriers state
-            barriers_block = stage_meta.get("barriers", {}) or {}
-            barriers_state = barriers_block.get("state", {}) or {}
+            act_4_block = stage_meta.get("act_4", {}) or {}
+            act_4_state = act_4_block.get("state", {}) or {}
 
-            current_turn = barriers_state.get("turn", 0)
+            current_turn = act_4_state.get("turn", 0)
 
-            barrier_1 = barriers_state.get("barrier_1", "")
-            barrier_2 = barriers_state.get("barrier_2", "")
-            barrier_3 = barriers_state.get("barrier_3", "")
-            last_barrier_state = barriers_state.get("last_barrier", "")
+            act_4_answer_1 = act_4_state.get("act_4_answer_1", "")
+            act_4_answer_2 = act_4_state.get("act_4_answer_2", "")
+            act_4_answer_3 = act_4_state.get("act_4_answer_3", "")
+            last_act_4_state = act_4_state.get("last_act_4", "")
 
-            # Determine last_barrier
+            # Determine last_act_4
             if current_turn == 0:
-                # First turn - use motivation_type from motivation agent
-                last_barrier = motivation_type if motivation_type else ""
+                # First turn - use act_3_type from motivation agent
+                last_act_4 = act_3_type if act_3_type else ""
             else:
-                # Use last_barrier if available, otherwise motivation_type
-                last_barrier = last_barrier_state if last_barrier_state else motivation_type
+                # Use last_act_4 if available, otherwise act_3_type
+                last_act_4 = last_act_4_state if last_act_4_state else act_3_type
 
-            # Compute question_direction
-            question_direction = compute_question_direction_barriers(
-                barrier_1, barrier_2, barrier_3, current_turn + 1
+            # Compute question_direction (this becomes question_mode)
+            question_mode = compute_question_direction_act_4(
+                act_4_answer_1, current_turn + 1
             )
 
-            ctx["last_barrier"] = last_barrier
-            ctx["question_direction"] = question_direction
-            # FOR SUMMARY AGENT: gather all insights from all 4 agents
+            # Determine focus_type based on turn number
+            # Both turns focus on "support"
+            focus_type = "support"
+
+            # Add all fields to context
+            ctx["last_theme"] = last_act_4
+            ctx["question_mode"] = question_mode
+            ctx["focus_type"] = focus_type
+            ctx["act1_identity"] = act1_identity
+            ctx["act2_learning_style"] = act2_learning_style
+            ctx["act2_engagement_style"] = act2_engagement_style
+            ctx["act2_final_tone"] = act2_final_tone
+
+            # Keep old field names for backwards compatibility
+            ctx["last_act_4"] = last_act_4
+            ctx["question_direction"] = question_mode
+
         if self.info_type == "summary":
             print("DEBUG - Summary agent building context")
             stage_meta = state.get("stage_meta", {}) or {}
             print(f"DEBUG - stage_meta keys: {list(stage_meta.keys())}")
             # Get intent data
-            intent_block = stage_meta.get("connection_intent", {}) or {}
-            intent_meta = intent_block.get("metadata", {}) or {}
-            intent_state = intent_block.get("state", {}) or {}
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_meta = act_1_block.get("metadata", {}) or {}
+            act_1_state = act_1_block.get("state", {}) or {}
 
             # Get tone data
-            tone_block = stage_meta.get("emotional_tone", {}) or {}
-            tone_meta = tone_block.get("metadata", {}) or {}
-            tone_state = tone_block.get("state", {}) or {}
+            act_2_block = stage_meta.get("act_2", {}) or {}
+            act_2_meta = act_2_block.get("metadata", {}) or {}
+            act_2_state = act_2_block.get("state", {}) or {}
 
             # Get motivation data
-            motivation_block = stage_meta.get("motivation", {}) or {}
-            motivation_meta = motivation_block.get("metadata", {}) or {}
-            motivation_state = motivation_block.get("state", {}) or {}
+            act_3_block = stage_meta.get("act_3", {}) or {}
+            act_3_meta = act_3_block.get("metadata", {}) or {}
+            act_3_state = act_3_block.get("state", {}) or {}
 
             # Get barriers data
-            barriers_block = stage_meta.get("barriers", {}) or {}
-            barriers_meta = barriers_block.get("metadata", {}) or {}
-            barriers_state = barriers_block.get("state", {}) or {}
+            act_4_block = stage_meta.get("act_4", {}) or {}
+            act_4_meta = act_4_block.get("metadata", {}) or {}
+            act_4_state = act_4_block.get("state", {}) or {}
 
             # Add intent data to context
-            ctx["intent_type"] = intent_meta.get("intent_type", "")
-            ctx["theme_1"] = intent_state.get("theme_1", "")
-            ctx["theme_2"] = intent_state.get("theme_2", "")
-            ctx["theme_3"] = intent_state.get("theme_3", "")
+            ctx["act_1_type"] = act_1_meta.get("act_1_type", "")
+            ctx["theme_1"] = act_1_state.get("theme_1", "")
+            ctx["theme_2"] = act_1_state.get("theme_2", "")
+            ctx["theme_3"] = act_1_state.get("theme_3", "")
 
             # Add tone data to context
-            ctx["emo_tone"] = tone_meta.get("emo_tone", "")
-            ctx["emo_tone_1"] = tone_state.get("emo_tone_1", "")
-            ctx["emo_tone_2"] = tone_state.get("emo_tone_2", "")
+            ctx["act_2_emo_tone"] = act_2_meta.get("act_2_emo_tone", "")
+            ctx["act_2_emo_1"] = act_2_state.get("act_2_emo_1", "")
+            ctx["act_2_emo_2"] = act_2_state.get("act_2_emo_2", "")
 
             # Add motivation data to context
-            ctx["motivation_type"] = motivation_meta.get("motivation_type", "")
-            ctx["motivation_1"] = motivation_state.get("motivation_1", "")
-            ctx["motivation_2"] = motivation_state.get("motivation_2", "")
-            ctx["motivation_3"] = motivation_state.get("motivation_3", "")
-            ctx["motivation_4"] = motivation_state.get("motivation_4", "")
-
+            ctx["act_3_type"] = act_3_meta.get("act_3_type", "")
+            ctx["act_3_answer_1"] = act_3_state.get("act_3_answer_1", "")
+            ctx["act_3_answer_2"] = act_3_state.get("act_3_answer_2", "")
+            ctx["act_3_answer_3"] = act_3_state.get("act_3_answer_3", "")
+            ctx["act_3_answer_4"] = act_3_state.get("act_3_answer_4", "")
             # Add barriers data to context
-            ctx["barrier_type"] = barriers_meta.get("barrier_type", "")
-            ctx["barrier_1"] = barriers_state.get("barrier_1", "")
-            ctx["barrier_2"] = barriers_state.get("barrier_2", "")
-            ctx["barrier_3"] = barriers_state.get("barrier_3", "")
-            ctx["barrier_4"] = barriers_state.get("barrier_4", "")
+            ctx["act_4_type"] = act_4_meta.get("act_4_type", "")
+            ctx["act_4_answer_1"] = act_4_state.get("act_4_answer_1", "")
+            ctx["act_4_answer_2"] = act_4_state.get("act_4_answer_2", "")
 
         return ctx
+
 
     def prepare_messages(self, ctx: Dict[str, str], state: AgentState) -> List[BaseMessage]:
         """Prepare the message list for LLM invocation."""
@@ -1729,7 +1928,7 @@ class BaseAgent(ABC):
             return AgentResponse(
                 question_text=mock_text,
                 options=[],
-                intent_mapping=["", "", "", ""],
+                option_mapping=["", "", "", ""],
                 metadata={},
                 state={},
             )
@@ -1745,20 +1944,57 @@ class BaseAgent(ABC):
             )
 
             # Use strict schema for connection_intent agent
-            if self.info_type == "connection_intent":
+            # Use strict schema for hook agent
+            if self.info_type == "hook":
+                structured_llm = llm.with_structured_output(HookResponse)
+                strict_response: HookResponse = structured_llm.invoke(msgs)
+                return AgentResponse(
+                    affirmation="",
+                    question_text=strict_response.hook_text,
+                    options=[],
+                    option_mapping=["", "", "", ""],
+                    metadata={"hook_text": strict_response.hook_text},
+                    state={},
+                )
+
+            # Use strict schema for connection_intent agent
+
+                # Use strict schema for connection_intent agent
+            elif self.info_type == "connection_intent":
                 structured_llm = llm.with_structured_output(ConnectionIntentResponse)
-                strict_response: ConnectionIntentResponse = structured_llm.invoke(msgs)
+
+                # DEBUG: Log raw LLM response before validation
+                try:
+                    strict_response: ConnectionIntentResponse = structured_llm.invoke(msgs)
+                    print(f"✅ DEBUG ACT_1 - Validation PASSED")
+                    print(f"   Options count: {len(strict_response.options)}")
+                    print(f"   Mapping count: {len(strict_response.option_mapping)}")
+                    print(f"   Options: {strict_response.options}")
+                    print(f"   Mapping: {strict_response.option_mapping}")
+                except Exception as e:
+                    print(f"❌ DEBUG ACT_1 - Validation FAILED")
+                    print(f"   Error: {e}")
+                    # Try to get the raw response without validation
+                    try:
+                        raw_llm = llm.invoke(msgs)
+                        print(f"   Raw LLM response: {raw_llm}")
+                    except:
+                        pass
+                    raise e  # Re-raise to trigger fallback
+
                 # Convert to AgentResponse format
                 response = AgentResponse(
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
                     options=strict_response.options,
-                    intent_mapping=strict_response.intent_mapping,
+                    option_mapping=strict_response.option_mapping,
                     metadata={},
                     state={}
                 )
             # Use strict schema for emotional_tone agent
-            # Use strict schema for emotional_tone agent
+
+
+
             # Use strict schema for emotional_tone agent
             elif self.info_type == "emotional_tone":
                 structured_llm = llm.with_structured_output(EmotionalToneResponse)
@@ -1766,20 +2002,20 @@ class BaseAgent(ABC):
 
                 # Convert to AgentResponse format
                 # Store response_format and scale-specific data in metadata
-                tone_metadata = {
+                act_2_metadata = {
                     "response_format": strict_response.response_format
                 }
 
                 # Add scale-specific fields if this is a scale question
                 if strict_response.response_format == "scale":
-                    tone_metadata["scale_range"] = strict_response.scale_range
-                    tone_metadata["scale_labels"] = strict_response.scale_labels or {}
-                    tone_metadata["scale_mapping"] = strict_response.scale_mapping or {}
+                    act_2_metadata["scale_range"] = strict_response.scale_range
+                    act_2_metadata["scale_labels"] = strict_response.scale_labels or {}
+                    act_2_metadata["scale_mapping"] = strict_response.scale_mapping or {}
 
-                # Pad emotional_mapping to always have 4 items (AgentResponse requirement)
-                emotional_mapping = list(strict_response.emotional_mapping or [])
-                while len(emotional_mapping) < 4:
-                    emotional_mapping.append("")  # Pad with empty strings
+                # Pad act_2_emotional_mapping to always have 4 items (AgentResponse requirement)
+                act_2_emotional_mapping = list(strict_response.act_2_emotional_mapping or [])
+                while len(act_2_emotional_mapping) < 4:
+                    act_2_emotional_mapping.append("")  # Pad with empty strings
 
                 # Pad options to match if needed
                 options = list(strict_response.options or [])
@@ -1790,8 +2026,8 @@ class BaseAgent(ABC):
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
                     options=options,
-                    intent_mapping=emotional_mapping,
-                    metadata=tone_metadata,
+                    option_mapping=act_2_emotional_mapping,
+                    metadata=act_2_metadata,
                     state={}
                 )
             # Use strict schema for motivation agent
@@ -1803,7 +2039,7 @@ class BaseAgent(ABC):
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
                     options=strict_response.options,
-                    intent_mapping=strict_response.motivation_mapping,  # Map motivation_mapping to intent_mapping
+                    option_mapping=strict_response.act_3_mapping,
                     metadata={},
                     state={}
                 )
@@ -1816,7 +2052,7 @@ class BaseAgent(ABC):
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
                     options=strict_response.options,
-                    intent_mapping=strict_response.barriers_mapping,  # Map barriers_mapping to intent_mapping
+                    option_mapping=strict_response.act_4_mapping,
                     metadata={},
                     state={}
                 )
@@ -1828,7 +2064,7 @@ class BaseAgent(ABC):
                 response = AgentResponse(
                     question_text=strict_response.summary_text,
                     options=[],
-                    intent_mapping=["", "", "", ""],  # Required field with 4 items
+                    option_mapping=["", "", "", ""],  # Required field with 4 items
                     metadata={
                         "summary_text": strict_response.summary_text,
                         "recommendations": strict_response.recommendations
@@ -1847,8 +2083,19 @@ class BaseAgent(ABC):
             print(f"Error with structured output: {e}")
             import traceback
             traceback.print_exc()
+            # Return a proper fallback response for hook agent
+            if self.info_type == "hook":
+                return AgentResponse(
+                    affirmation="",
+                    question_text="Welcome! Let's discover what resonates with you.",
+                    options=[],
+                    option_mapping=["", "", "", ""],
+                    metadata={"hook_text": "Welcome! Let's discover what resonates with you.", "error": str(e)},
+                    state={},
+                )
 
             # Return a proper fallback response for connection_intent agent
+
             if self.info_type == "connection_intent":
                 return AgentResponse(
                     affirmation="I'd love to understand what brings you here today.",
@@ -1859,7 +2106,7 @@ class BaseAgent(ABC):
                         "Finding some calm",
                         "I'm not quite sure yet"
                     ],
-                    intent_mapping=["self_expression", "skill_growth", "wellness", "unsure"],
+                    option_mapping=["self_expression", "skill_growth", "wellness", "unsure"],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1875,7 +2122,7 @@ class BaseAgent(ABC):
                         "A bit overwhelmed",
                         "I'm not sure yet"
                     ],
-                    intent_mapping=["positive", "neutral", "tense", "unsure"],
+                    option_mapping=["positive", "neutral", "tense", "unsure"],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1890,7 +2137,7 @@ class BaseAgent(ABC):
                         "Finding calm and balance",
                         "I'm still figuring it out"
                     ],
-                    intent_mapping=["progress", "expression", "relief", "unsure"],
+                    option_mapping=["progress", "expression", "relief", "unsure"],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1905,7 +2152,7 @@ class BaseAgent(ABC):
                         "Not having enough time or energy",
                         "I'm still figuring it out"
                     ],
-                    intent_mapping=["consistency", "overwhelm", "time_energy", "unsure"],
+                    option_mapping=["consistency", "overwhelm", "time_energy", "unsure"],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1921,7 +2168,7 @@ class BaseAgent(ABC):
                 return AgentResponse(
                     question_text=fallback_summary_text,
                     options=[],
-                    intent_mapping=["", "", "", ""],
+                    option_mapping=["", "", "", ""],
                     metadata={
                         "error": str(e),
                         "summary_text": fallback_summary_text,
@@ -1936,7 +2183,7 @@ class BaseAgent(ABC):
                 return AgentResponse(
                     question_text=mock_text,
                     options=[],
-                    intent_mapping=["", "", "", ""],
+                    option_mapping=["", "", "", ""],
                     metadata={"error": str(e)},
                     state={},
                 )
@@ -1951,11 +2198,26 @@ class BaseAgent(ABC):
 
         # Build user-facing text: affirmation + question + enumerated options
         display_text = ""
-
+        # Handle affirmation - skip act_1's first affirmation only
+        # Handle affirmation - skip act_1's first affirmation only
         if response.affirmation:
-            display_text = response.affirmation + "\n\n"
+            # Check if this is act_1's first question (turn 0, before increment)
+            stage_meta = state.get("stage_meta", {}) or {}
+            act_1_block = stage_meta.get("act_1", {}) or {}
+            act_1_state = act_1_block.get("state", {}) or {}
+            act_1_turn = act_1_state.get("turn", 0)
 
-        display_text += response.question_text or ""
+            # Skip affirmation only if it's act_1 and turn is 0 (first question, before increment)
+            if not (self.info_type == "connection_intent" and act_1_turn == 0):
+                display_text = format_affirmation(response.affirmation) + "\n\n"
+
+
+
+        # Check if this is from hook agent and format accordingly
+        if self.info_type == "hook" and response.question_text:
+            display_text += format_hook_text(response.question_text)
+        else:
+            display_text += response.question_text or ""
 
         if response.options:
             lines = []
@@ -1965,6 +2227,7 @@ class BaseAgent(ABC):
             display_text = display_text.rstrip() + "\n\n" + "\n".join(lines)
 
         import copy
+
         # ------------------------------------------------------------------
         # STAGE META MERGE + HARD STATE MACHINE FOR connection_intent
         # ------------------------------------------------------------------
@@ -1972,7 +2235,7 @@ class BaseAgent(ABC):
         stage_meta_prev = copy.deepcopy(state.get("stage_meta", {}) or {})
 
         # Previous block for this agent
-        old_block = stage_meta_prev.get(self.info_type) or {}
+        old_block = stage_meta_prev.get(self.name) or {}
         old_meta = dict(old_block.get("metadata") or {})
         old_state = dict(old_block.get("state") or {})
 
@@ -1988,6 +2251,19 @@ class BaseAgent(ABC):
             new_meta.update(resp_meta)
         if resp_state:
             new_state.update(resp_state)
+        # ---------- HOOK LOGIC ----------
+        if self.info_type == "hook":
+            # Hook agent just displays the message and sets status to clear
+            hook_text = resp_meta.get("hook_text", "")
+            new_meta["hook_status"] = "clear"
+            new_meta["hook_text"] = hook_text
+            new_state["hook_displayed"] = True
+
+            stage_meta_prev[self.name] = {
+                "metadata": new_meta,
+                "state": new_state,
+            }
+
 
         # ---------- HARD TURN / LEVEL / METADATA LOGIC FOR CONNECTION INTENT ----------
         # ---------- SIMPLIFIED CONNECTION_INTENT LOGIC ----------
@@ -2011,6 +2287,7 @@ class BaseAgent(ABC):
                 new_state["theme_1"] = ""
                 new_state["theme_2"] = ""
                 new_state["theme_3"] = ""
+                new_state["theme_4"] = ""
                 new_state["last_theme"] = ad_theme  # Start with ad_theme
 
             # Set level based on turn
@@ -2020,20 +2297,22 @@ class BaseAgent(ABC):
                 new_state["last_level"] = "L2"
             elif current_turn == 3:
                 new_state["last_level"] = "L3"
-            else:
+            elif current_turn == 4:
                 new_state["last_level"] = "L4"
+            else:
+                new_state["last_level"] = "L4"  # Fallback
 
-            # Store intent_mapping and options for next turn's classification
-            if response.intent_mapping:
-                new_state["intent_mapping"] = response.intent_mapping
+            # Store option_mapping and options for next turn's classification
+            if response.option_mapping:
+                new_state["option_mapping"] = response.option_mapping
             if response.options:
                 new_state["options"] = response.options
 
-            # Keep metadata fields (these will be updated by update_intent_metadata_after_answer)
-            new_meta.setdefault("confirm_intent", "unclear")
-            new_meta.setdefault("intent_type", "")
+            # Keep metadata fields (these will be updated by update_act_1_metadata_after_answer)
+            new_meta.setdefault("confirm_act_1", "unclear")
+            new_meta.setdefault("act_1_type", "")
             new_state.setdefault("last_theme", "")
-            stage_meta_prev[self.info_type] = {
+            stage_meta_prev[self.name] = {
                 "metadata": new_meta,
                 "state": new_state,
             }
@@ -2053,10 +2332,15 @@ class BaseAgent(ABC):
 
             # Initialize fields on turn 1
             if current_turn == 1:
-                new_state["emo_tone_1"] = ""
-                new_state["emo_tone_2"] = ""
+                new_state["act_2_emo_1"] = ""
+                new_state["act_2_emo_2"] = ""
+                new_state["act_2_emo_3"] = ""
+                new_state["act_2_emo_4"] = ""
                 new_state["response_format_1"] = ""
                 new_state["response_format_2"] = ""
+                new_state["response_format_3"] = ""
+                new_state["response_format_4"] = ""
+                new_state["last_theme"] = ""
 
             # Get response format from metadata
             response_format = resp_meta.get("response_format", "multiple_choice")
@@ -2066,6 +2350,10 @@ class BaseAgent(ABC):
                 new_state["response_format_1"] = response_format
             elif current_turn == 2:
                 new_state["response_format_2"] = response_format
+            elif current_turn == 3:
+                new_state["response_format_3"] = response_format
+            elif current_turn == 4:
+                new_state["response_format_4"] = response_format
 
             # Handle different response formats
             if response_format == "scale":
@@ -2073,19 +2361,19 @@ class BaseAgent(ABC):
                 new_state["scale_range"] = resp_meta.get("scale_range", "")
                 new_state["scale_labels"] = resp_meta.get("scale_labels", {})
                 new_state["scale_mapping"] = resp_meta.get("scale_mapping", {})
-                # Don't store options/emotional_mapping for scales
+                # Don't store options/act_2_emotional_mapping for scales
             else:
                 # For multiple_choice and yes_no: store options and mapping
-                if response.intent_mapping:  # emotional_mapping was mapped to intent_mapping
-                    new_state["emotional_mapping"] = response.intent_mapping
+                if response.option_mapping:
+                    new_state["act_2_emotional_mapping"] = response.option_mapping
                 if response.options:
                     new_state["options"] = response.options
 
-            # Keep metadata fields (these will be updated by update_emotional_tone_metadata_after_answer)
-            new_meta.setdefault("confirm_tone", "unclear")
-            new_meta.setdefault("emo_tone", "unclear")
+            # Keep metadata fields (these will be updated by update_emotional_act_2_metadata_after_answer)
+            new_meta.setdefault("confirm_act_2", "unclear")
+            new_meta.setdefault("act_2_emo_tone", "unclear")
 
-            stage_meta_prev[self.info_type] = {
+            stage_meta_prev[self.name] = {
                 "metadata": new_meta,
                 "state": new_state,
             }
@@ -2107,11 +2395,11 @@ class BaseAgent(ABC):
                 ad_data = state.get("ad_data", {}) or {}
                 ad_theme = ad_data.get("ad_theme", "")
                 new_state["ad_theme"] = ad_theme
-                new_state["motivation_1"] = ""
-                new_state["motivation_2"] = ""
-                new_state["motivation_3"] = ""
-                new_state["motivation_4"] = ""
-                new_state["last_motivation"] = ""  # Will be set after first answer
+                new_state["act_3_answer_1"] = ""
+                new_state["act_3_answer_2"] = ""
+                new_state["act_3_answer_3"] = ""
+                new_state["act_3_answer_4"] = ""
+                new_state["last_act_3"] = ""  # Will be set after first answer
 
             # Set level based on turn
             if current_turn == 1:
@@ -2125,18 +2413,18 @@ class BaseAgent(ABC):
             else:
                 new_state["last_level"] = "L5"
 
-            # Store motivation_mapping and options from LLM response
-            if response.intent_mapping:  # motivation_mapping was mapped to intent_mapping
-                new_state["motivation_mapping"] = response.intent_mapping
+            # Store act_3_mapping and options from LLM response
+            if response.option_mapping:
+                new_state["act_3_mapping"] = response.option_mapping
             if response.options:
                 new_state["options"] = response.options
 
-            # Keep metadata fields (these will be updated by update_motivation_metadata_after_answer)
-            new_meta.setdefault("confirm_motivation", "unclear")
-            new_meta.setdefault("motivation_type", "")
-            new_state.setdefault("last_motivation", "")
+            # Keep metadata fields (these will be updated by update_act_3_metadata_after_answer)
+            new_meta.setdefault("confirm_act_3", "unclear")
+            new_meta.setdefault("act_3_type", "")
+            new_state.setdefault("last_act_3", "")
 
-            stage_meta_prev[self.info_type] = {
+            stage_meta_prev[self.name] = {
                 "metadata": new_meta,
                 "state": new_state,
             }
@@ -2148,7 +2436,6 @@ class BaseAgent(ABC):
                 old_turn = int(old_turn)
             except (TypeError, ValueError):
                 old_turn = 0
-
             # Increment turn
             current_turn = old_turn + 1
             new_state["turn"] = current_turn
@@ -2158,39 +2445,34 @@ class BaseAgent(ABC):
                 ad_data = state.get("ad_data", {}) or {}
                 ad_theme = ad_data.get("ad_theme", "")
                 new_state["ad_theme"] = ad_theme
-                new_state["barrier_1"] = ""
-                new_state["barrier_2"] = ""
-                new_state["barrier_3"] = ""
-                new_state["barrier_4"] = ""
-                new_state["last_barrier"] = ""  # Will be set after first answer
+                new_state["act_4_answer_1"] = ""
+                new_state["act_4_answer_2"] = ""
+                new_state["last_act_4"] = ""  # Will be set after first answer
 
             # Set level based on turn
             if current_turn == 1:
                 new_state["last_level"] = "L1"
             elif current_turn == 2:
                 new_state["last_level"] = "L2"
-            elif current_turn == 3:
-                new_state["last_level"] = "L3"
-            elif current_turn == 4:
-                new_state["last_level"] = "L4"
             else:
-                new_state["last_level"] = "L5"
+                new_state["last_level"] = "L2"  # Only 2 turns
 
-            # Store barriers_mapping and options from LLM response
-            if response.intent_mapping:  # barriers_mapping was mapped to intent_mapping
-                new_state["barriers_mapping"] = response.intent_mapping
+            # Store act_4_mapping and options from LLM response
+            if response.option_mapping:
+                new_state["act_4_mapping"] = response.option_mapping
             if response.options:
                 new_state["options"] = response.options
 
-            # Keep metadata fields (these will be updated by update_barriers_metadata_after_answer)
-            new_meta.setdefault("confirm_barriers", "unclear")
-            new_meta.setdefault("barrier_type", "")
-            new_state.setdefault("last_barrier", "")
+            # Keep metadata fields (these will be updated by update_act_4_metadata_after_answer)
+            new_meta.setdefault("confirm_act_4", "unclear")
+            new_meta.setdefault("act_4_type", "")
+            new_state.setdefault("last_act_4", "")
 
-            stage_meta_prev[self.info_type] = {
+            stage_meta_prev[self.name] = {
                 "metadata": new_meta,
                 "state": new_state,
             }
+
             # ---------- SUMMARY AGENT LOGIC ----------
         # ---------- SUMMARY AGENT LOGIC ----------
         if self.info_type == "summary":
@@ -2201,16 +2483,12 @@ class BaseAgent(ABC):
             new_meta["confirm_summary"] = "clear"
             # Store summary_text and recommendations from response
             # Check if it's in metadata (fallback case) or as attributes (success case)
-            if hasattr(response, 'summary_text'):
-                new_meta["summary_text"] = response.summary_text
-                new_meta["recommendations"] = response.recommendations
-            else:
-                # Fallback: get from metadata
-                new_meta["summary_text"] = response.metadata.get("summary_text", "")
-                new_meta["recommendations"] = response.metadata.get("recommendations", [])
+            # Always read from metadata (where the data actually is)
+            new_meta["summary_text"] = response.metadata.get("summary_text", "")
+            new_meta["recommendations"] = response.metadata.get("recommendations", [])
 
 
-            stage_meta_prev[self.info_type] = {
+            stage_meta_prev[self.name] = {
                 "metadata": new_meta,
                 "state": new_state,
             }
@@ -2223,23 +2501,23 @@ class BaseAgent(ABC):
             ad_data = state.get("ad_data", {}) or {}
             ad_theme = ad_data.get("ad_theme", "") or ""
 
-            # Compute final intent_type deterministically
-            final_intent_type = compute_final_intent_from_state(
+            # Compute final act_1_type deterministically
+            final_act_1_type = compute_final_intent_from_state(
                 ci_state_block,
                 ad_theme=ad_theme,
             )
 
-            # Finalizer always sets confirm_intent = "clear"
-            new_meta["intent_type"] = final_intent_type
-            new_meta["confirm_intent"] = "clear"
+            # Finalizer always sets confirm_act_1 = "clear"
+            new_meta["act_1_type"] = final_act_1_type
+            new_meta["confirm_act_1"] = "clear"
 
             # Mark this as the final (TURN 4) snapshot
             new_state["turn"] = 4
             new_state["last_level"] = "L4"
 
             # Update last_theme if we have a clear non-unsure, non-mixed category
-            if final_intent_type not in ("unsure", "mixed", ""):
-                new_state["last_theme"] = final_intent_type
+            if final_act_1_type not in ("unsure", "mixed", ""):
+                new_state["last_theme"] = final_act_1_type
         if self.info_type == "connection_tone":
             # 1) Hard-control the tone turn counter in Python (ignore LLM's turn)
             #    We treat turns as PHASES: 1 = Q1, 2 = Q2, 3 = FINAL, 4 = DONE.
@@ -2278,59 +2556,59 @@ class BaseAgent(ABC):
             # 2) Enforce per-turn emotional tone invariants
             #
             # TURN 1→2 (Q1 phase):
-            #   - emo_tone_1 MUST be "" (no classification yet)
-            #   - emo_tone_2 MUST be ""
+            #   - act_2_emo_1 MUST be "" (no classification yet)
+            #   - act_2_emo_2 MUST be ""
             #
             # TURN 2→3 (Q2 phase):
-            #   - emo_tone_1 may be filled by the LLM from Q1
-            #   - emo_tone_2 MUST stay ""
+            #   - act_2_emo_1 may be filled by the LLM from Q1
+            #   - act_2_emo_2 MUST stay ""
             #
             # TURN 3→4 (FINAL phase):
-            #   - LLM sets emo_tone_2 + final emo_tone / confirm_tone
+            #   - LLM sets act_2_emo_2 + final act_2_emo_tone / confirm_act_2
             #
             # TURN 4+ (DONE phase):
             #   - Everything stays as-is
 
             if incoming_turn <= 1:
                 # Q1 phase - first tone question → wipe any premature tone labels
-                new_state["emo_tone_1"] = ""
-                new_state["emo_tone_2"] = ""
-                new_state.setdefault("emo_tone_3", "")
+                new_state["act_2_emo_1"] = ""
+                new_state["act_2_emo_2"] = ""
+                new_state.setdefault("act_2_emo_3", "")
                 # Ensure metadata fields exist
-                new_meta.setdefault("emo_tone", "unclear")
-                new_meta.setdefault("emo_tone_type", "")
-                new_meta.setdefault("confirm_tone", "unclear")
+                new_meta.setdefault("act_2_emo_tone", "unclear")
+                new_meta.setdefault("emo_act_2_type", "")
+                new_meta.setdefault("confirm_act_2", "unclear")
 
             elif incoming_turn == 2:
-                # Q2 phase - emo_tone_1 should already be set by LLM from Q1
-                # Keep emo_tone_2 blank until Turn 3
-                new_state.setdefault("emo_tone_1", "")  # keep it if already set
-                new_state["emo_tone_2"] = ""  # not set yet
-                new_state.setdefault("emo_tone_3", "")
+                # Q2 phase - act_2_emo_1 should already be set by LLM from Q1
+                # Keep act_2_emo_2 blank until Turn 3
+                new_state.setdefault("act_2_emo_1", "")  # keep it if already set
+                new_state["act_2_emo_2"] = ""  # not set yet
+                new_state.setdefault("act_2_emo_3", "")
                 # Keep tone unclear during Q2
-                new_meta.setdefault("emo_tone", "unclear")
-                new_meta.setdefault("emo_tone_type", "")
-                new_meta.setdefault("confirm_tone", "unclear")
+                new_meta.setdefault("act_2_emo_tone", "unclear")
+                new_meta.setdefault("emo_act_2_type", "")
+                new_meta.setdefault("confirm_act_2", "unclear")
 
             elif incoming_turn == 3:
-                # FINAL phase - LLM should set emo_tone_2 + final classification
-                new_state.setdefault("emo_tone_1", "")
-                new_state.setdefault("emo_tone_2", "")  # LLM MUST populate this now
-                new_state.setdefault("emo_tone_3", "")
+                # FINAL phase - LLM should set act_2_emo_2 + final classification
+                new_state.setdefault("act_2_emo_1", "")
+                new_state.setdefault("act_2_emo_2", "")  # LLM MUST populate this now
+                new_state.setdefault("act_2_emo_3", "")
 
-                # Safety check: if LLM didn't set emo_tone_2, log warning
-                if not new_state.get("emo_tone_2"):
-                    print("WARNING: emo_tone_2 not set by LLM during FINAL phase")
+                # Safety check: if LLM didn't set act_2_emo_2, log warning
+                if not new_state.get("act_2_emo_2"):
+                    print("WARNING: act_2_emo_2 not set by LLM during FINAL phase")
 
-                # Safety check: if LLM didn't set confirm_tone to "clear", force it
-                if new_meta.get("confirm_tone") != "clear":
-                    print("WARNING: LLM didn't set confirm_tone='clear' in FINAL phase, forcing it")
-                    new_meta["confirm_tone"] = "clear"
+                # Safety check: if LLM didn't set confirm_act_2 to "clear", force it
+                if new_meta.get("confirm_act_2") != "clear":
+                    print("WARNING: LLM didn't set confirm_act_2='clear' in FINAL phase, forcing it")
+                    new_meta["confirm_act_2"] = "clear"
 
-                    # If LLM also didn't set final emo_tone, compute it as fallback
-                    if not new_meta.get("emo_tone") or new_meta.get("emo_tone") == "unclear":
-                        emo_1 = new_state.get("emo_tone_1", "")
-                        emo_2 = new_state.get("emo_tone_2", "")
+                    # If LLM also didn't set final act_2_emo_tone, compute it as fallback
+                    if not new_meta.get("act_2_emo_tone") or new_meta.get("act_2_emo_tone") == "unclear":
+                        emo_1 = new_state.get("act_2_emo_1", "")
+                        emo_2 = new_state.get("act_2_emo_2", "")
 
                         if emo_1 and emo_2:
                             if emo_1 == emo_2 and emo_1 != "unsure":
@@ -2347,30 +2625,30 @@ class BaseAgent(ABC):
                             final_tone = "unsure"
 
                         print(f"FALLBACK: Computing final tone as '{final_tone}' from emo_1={emo_1}, emo_2={emo_2}")
-                        new_meta["emo_tone"] = final_tone
-                        new_meta["emo_tone_type"] = final_tone
+                        new_meta["act_2_emo_tone"] = final_tone
+                        new_meta["emo_act_2_type"] = final_tone
 
             else:
                 # DONE phase (turn >= 4) - don't ask more questions
-                new_state.setdefault("emo_tone_1", "")
-                new_state.setdefault("emo_tone_2", "")
-                new_state.setdefault("emo_tone_3", "")
-                # Ensure confirm_tone stays "clear"
-                if new_meta.get("confirm_tone") != "clear":
-                    print("WARNING: confirm_tone not 'clear' in DONE phase, fixing")
-                    new_meta["confirm_tone"] = "clear"
+                new_state.setdefault("act_2_emo_1", "")
+                new_state.setdefault("act_2_emo_2", "")
+                new_state.setdefault("act_2_emo_3", "")
+                # Ensure confirm_act_2 stays "clear"
+                if new_meta.get("confirm_act_2") != "clear":
+                    print("WARNING: confirm_act_2 not 'clear' in DONE phase, fixing")
+                    new_meta["confirm_act_2"] = "clear"
 
             # 3) Copy canonical intent from connection_intent into tone metadata
-            intent_block = stage_meta_prev.get("connection_intent") or {}
-            intent_meta = intent_block.get("metadata") or {}
+            act_1_block = stage_meta_prev.get("connection_intent") or {}
+            act_1_meta = act_1_block.get("metadata") or {}
 
-            canonical_intent_type = intent_meta.get("intent_type")
-            canonical_confirm_intent = intent_meta.get("confirm_intent")
+            canonical_act_1_type = act_1_meta.get("act_1_type")
+            canonical_confirm_act_1 = act_1_meta.get("confirm_act_1")
 
-            if canonical_intent_type is not None:
-                new_meta["intent_type"] = canonical_intent_type
-            if canonical_confirm_intent is not None:
-                new_meta["confirm_intent"] = canonical_confirm_intent
+            if canonical_act_1_type is not None:
+                new_meta["act_1_type"] = canonical_act_1_type
+            if canonical_confirm_act_1 is not None:
+                new_meta["confirm_act_1"] = canonical_confirm_act_1
 
             # 4) Normalize behavioral_signal to a safe default if it's weird/empty
             allowed_signals = {
@@ -2405,6 +2683,88 @@ class BaseAgent(ABC):
             exchanges_with_current=state.get("exchanges_with_current", 0) + 1,
             last_agent=self.name,
         )
+
+    def compute_act2_fields(self, act_2_emo_1: str, act_2_emo_2: str,
+                            act_2_emo_3: str, act_2_emo_4: str) -> Dict[str, str]:
+        """
+        Convert Act 2 emotional mappings into Act 3–ready human-readable signals.
+        """
+
+        unified_map = {
+            # momentum-driven
+            "fast_starter": "momentum_driven",
+            "early_wins": "momentum_driven",
+            "micro_wins": "momentum_driven",
+            "confidence_boost": "momentum_driven",
+
+            # steady
+            "slow_steady": "steady",
+            "reflective": "steady",
+            "reflective_only": "steady",
+            "structure_seeker": "steady",
+            "meaning_first": "steady",
+            "guided_support": "steady",
+            "flexible_pacing": "steady",
+            "clarity_seeker": "steady",
+            "consistency_seeker": "steady",
+            "passive_learner": "steady",
+            "short_session": "steady",
+            "unclear_steps": "steady",
+            "too_many_choices": "steady",
+
+            # exploratory
+            "explorer": "exploratory",
+            "hands_on": "exploratory",
+            "visually_rewarding": "exploratory",
+            "playful_learning": "exploratory",
+            "curated_exploration": "exploratory",
+            "variety_seeker": "exploratory",
+
+            # friction-sensitive
+            "overwhelm": "friction_sensitive",
+            "time_pressure": "friction_sensitive",
+            "setup_friction": "friction_sensitive",
+            "lose_momentum": "friction_sensitive",
+            "low_initial_progress": "friction_sensitive",
+            "distraction_prone": "friction_sensitive",
+
+            # ambiguous
+            "unsure": "ambiguous"
+        }
+
+        HUMAN_MEANINGS = {
+            "steady": "You approach learning in a calm, thoughtful, and consistent way.",
+            "exploratory": "You learn best by exploring, experimenting, and following curiosity.",
+            "momentum_driven": "You stay motivated by forward movement — early progress and quick wins help you stay engaged.",
+            "friction_sensitive": "You thrive when barriers are removed and the path feels smooth and supported.",
+            "ambiguous": "Your learning preferences are still emerging and haven’t settled into a clear pattern yet.",
+            "mixed": "Your learning and engagement styles pull in different directions, creating a mixed emotional rhythm."
+        }
+
+        # Determine learning category
+        raw_learning = act_2_emo_1 or "unsure"
+        learning_category = unified_map.get(raw_learning, "ambiguous")
+
+        # Determine engagement category
+        raw_engagement = act_2_emo_3 or "unsure"
+        engagement_category = unified_map.get(raw_engagement, "ambiguous")
+
+        # Determine final tone
+        if learning_category == "ambiguous" or engagement_category == "ambiguous":
+            final_category = "ambiguous"
+        elif learning_category == engagement_category:
+            final_category = learning_category
+        else:
+            final_category = "mixed"
+
+        # Convert categories → human sentences
+        return {
+            "act2_learning_style": HUMAN_MEANINGS[learning_category],
+            "act2_engagement_style": HUMAN_MEANINGS[engagement_category],
+            "act2_final_tone": HUMAN_MEANINGS[final_category]
+        }
+
+
 class SupervisorDecision(PydanticV1BaseModel):
     next_agent: str = PydanticV1Field(
         description=(
@@ -2529,44 +2889,44 @@ class Supervisor:
         collected = state.get("collected_info", {})
         stage_meta = state.get("stage_meta", {}) or {}
 
-        # --- Read INTENT block (connection_intent) ---
-        intent_block = stage_meta.get("connection_intent", {}) or {}
-        intent_meta = intent_block.get("metadata", {}) or {}
+        # --- Read INTENT block (act_1) ---
+        act_1_block = stage_meta.get("act_1", {}) or {}
+        act_1_meta = act_1_block.get("metadata", {}) or {}
 
         # --- Read TONE block (connection_tone) ---
-        tone_block = stage_meta.get("connection_tone", {}) or {}
-        tone_meta = tone_block.get("metadata", {}) or {}
+        act_2_block = stage_meta.get("connection_tone", {}) or {}
+        act_2_meta = act_2_block.get("metadata", {}) or {}
 
         # Status fields
-        intent_status = (
-                intent_meta.get("confirm_intent")
-                or intent_meta.get("intent_status")
+        act_1_status = (
+                act_1_meta.get("confirm_act_1")
+                or act_1_meta.get("act_1_status")
                 or ""
         ).lower()
-        intent_type = (intent_meta.get("intent_type") or "").lower()
-        emo_tone = (
-                tone_meta.get("emo_tone")
-                or tone_meta.get("emotional_tone")
+        act_1_type = (act_1_meta.get("act_1_type") or "").lower()
+        act_2_emo_tone = (
+                act_2_meta.get("act_2_emo_tone")
+                or act_2_meta.get("emotional_tone")
                 or "unclear"
         ).lower()
 
         # Turn counts per agent (fallback to counts of collected answers)
-        intent_turns = len(collected.get("connection_intent", []))
-        tone_turns = len(collected.get("connection_tone", []))
-        total_turns = intent_turns + tone_turns
+        act_1_turns = len(collected.get("act_1", []))
+        act_2_turns = len(collected.get("connection_tone", []))
+        total_turns = act_1_turns + act_2_turns
 
         ad_data = state.get("ad_data", {}) or {}
         ad_theme = ad_data.get("ad_creative_theme", "").lower()
 
         print(
-            f"DEBUG SUPERVISOR (fallback) - intent_turns: {intent_turns}, "
-            f"tone_turns: {tone_turns}, total_turns: {total_turns}, "
-            f"intent_status: {intent_status}, emo_tone: {emo_tone}, "
-            f"ad_theme: {ad_theme}, intent_type: {intent_type}"
+            f"DEBUG SUPERVISOR (fallback) - act_1_turns: {act_1_turns}, "
+            f"act_2_turns: {act_2_turns}, total_turns: {total_turns}, "
+            f"act_1_status: {act_1_status}, act_2_emo_tone: {act_2_emo_tone}, "
+            f"ad_theme: {ad_theme}, act_1_type: {act_1_type}"
         )
 
         # Stage 1 exit readiness (roughly mirror YAML logic)
-        ready = (intent_status in ("clear", "unsure")) and (emo_tone not in ("resistant", "unclear"))
+        ready = (act_1_status in ("clear", "unsure")) and (act_2_emo_tone not in ("resistant", "unclear"))
 
         # --- If ready for deep stage or we've hit max turns, route out of Stage 1 ---
         if ready or total_turns >= 6:
@@ -2581,8 +2941,8 @@ class Supervisor:
                 "ambition": ["monetization", "side_hustle"],
             }
 
-            # Prefer explicit intent_type, fall back to ad theme
-            route_key = intent_type if intent_type in routing_map else ad_theme
+            # Prefer explicit act_1_type, fall back to ad theme
+            route_key = act_1_type if act_1_type in routing_map else ad_theme
 
             if route_key in routing_map:
                 for possible_agent in routing_map[route_key]:
@@ -2603,17 +2963,17 @@ class Supervisor:
         # --- Otherwise, we're still in Stage 1: pick the right connection sub-agent ---
 
         # 1) If intent is still unclear → keep working with intent agent
-        if intent_status in ("", "unclear"):
-            if "connection_intent" in self.agent_keys:
-                print("DEBUG SUPERVISOR (fallback) - Continuing with connection_intent agent")
+        if act_1_status in ("", "unclear"):
+            if "act_1" in self.agent_keys:
+                print("DEBUG SUPERVISOR (fallback) - Continuing with act_1 agent")
                 return {
-                    "agent_index": self.agent_keys.index("connection_intent"),
-                    "next_agent": "connection_intent",
+                    "agent_index": self.agent_keys.index("act_1"),
+                    "next_agent": "act_1",
                     "exchanges_with_current": 0,
                 }
 
         # 2) If intent is set but tone is unclear → move to tone agent
-        if emo_tone in ("", "unclear"):
+        if act_2_emo_tone in ("", "unclear"):
             if "connection_tone" in self.agent_keys:
                 print("DEBUG SUPERVISOR (fallback) - Routing to connection_tone agent")
                 return {
@@ -2635,51 +2995,54 @@ class Supervisor:
         Extracts key variables from stage_meta for easy access by the LLM.
         """
         stage_meta = state.get("stage_meta", {}) or {}
+        # Extract hook status
+        hook_block = stage_meta.get("hook", {}) or {}
+        hook_meta = hook_block.get("metadata", {}) or {}
+        hook_status = hook_meta.get("hook_status", "unclear")
 
         # Extract intent info
-        intent_block = stage_meta.get("connection_intent", {}) or {}
-        intent_meta = intent_block.get("metadata", {}) or {}
-        intent_state = intent_block.get("state", {}) or {}
+        act_1_block = stage_meta.get("act_1", {}) or {}
+        act_1_meta = act_1_block.get("metadata", {}) or {}
+        act_1_state = act_1_block.get("state", {}) or {}
 
-        intent_status = intent_meta.get("confirm_intent", "unclear")
-        intent_turn = intent_state.get("turn", 0)
+        act_1_status = act_1_meta.get("confirm_act_1", "unclear")
+        act_1_turn = act_1_state.get("turn", 0)
 
         # Extract tone info - try emotional_tone first, fallback to connection_tone
-        tone_block = stage_meta.get("emotional_tone", {}) or stage_meta.get("connection_tone", {}) or {}
-        tone_meta = tone_block.get("metadata", {}) or {}
-        tone_state = tone_block.get("state", {}) or {}
+        act_2_block = stage_meta.get("act_2", {}) or stage_meta.get("connection_tone", {}) or {}
+        act_2_meta = act_2_block.get("metadata", {}) or {}
+        act_2_state = act_2_block.get("state", {}) or {}
 
-        confirm_tone = tone_meta.get("confirm_tone", "unclear")
-        tone_turn = tone_state.get("turn", 0)
-        emo_tone_1 = tone_state.get("emo_tone_1", "")
-        emo_tone_2 = tone_state.get("emo_tone_2", "")
-        emo_tone = tone_meta.get("emo_tone", "unclear")
+        confirm_act_2 = act_2_meta.get("confirm_act_2", "unclear")
+        act_2_turn = act_2_state.get("turn", 0)
+        act_2_emo_1 = act_2_state.get("act_2_emo_1", "")
+        act_2_emo_2 = act_2_state.get("act_2_emo_2", "")
+        act_2_emo_tone = act_2_meta.get("act_2_emo_tone", "unclear")
 
         # Extract motivation info
-        motivation_block = stage_meta.get("motivation", {}) or {}
-        motivation_meta = motivation_block.get("metadata", {}) or {}
-        motivation_state = motivation_block.get("state", {}) or {}
+        act_3_block = stage_meta.get("act_3", {}) or {}
+        act_3_meta = act_3_block.get("metadata", {}) or {}
+        act_3_state = act_3_block.get("state", {}) or {}
 
-        confirm_motivation = motivation_meta.get("confirm_motivation", "unclear")
-        motivation_turn = motivation_state.get("turn", 0)
-        motivation_1 = motivation_state.get("motivation_1", "")
-        motivation_2 = motivation_state.get("motivation_2", "")
-        motivation_3 = motivation_state.get("motivation_3", "")
-        motivation_4 = motivation_state.get("motivation_4", "")
-        motivation_type = motivation_meta.get("motivation_type", "unclear")
+        confirm_act_3 = act_3_meta.get("confirm_act_3", "unclear")
+        act_3_turn = act_3_state.get("turn", 0)
+        act_3_answer_1 = act_3_state.get("act_3_answer_1", "")
+        act_3_answer_2 = act_3_state.get("act_3_answer_2", "")
+        act_3_answer_3 = act_3_state.get("act_3_answer_3", "")
+        act_3_answer_4 = act_3_state.get("act_3_answer_4", "")
+        act_3_type = act_3_meta.get("act_3_type", "unclear")
 
         # Extract barriers info
-        barriers_block = stage_meta.get("barriers", {}) or {}
-        barriers_meta = barriers_block.get("metadata", {}) or {}
-        barriers_state = barriers_block.get("state", {}) or {}
+        act_4_block = stage_meta.get("act_4", {}) or {}
+        act_4_meta = act_4_block.get("metadata", {}) or {}
+        act_4_state = act_4_block.get("state", {}) or {}
 
-        confirm_barriers = barriers_meta.get("confirm_barriers", "unclear")
-        barriers_turn = barriers_state.get("turn", 0)
-        barrier_1 = barriers_state.get("barrier_1", "")
-        barrier_2 = barriers_state.get("barrier_2", "")
-        barrier_3 = barriers_state.get("barrier_3", "")
-        barrier_4 = barriers_state.get("barrier_4", "")
-        barrier_type = barriers_meta.get("barrier_type", "unclear")
+        confirm_act_4 = act_4_meta.get("confirm_act_4", "unclear")
+        act_4_turn = act_4_state.get("turn", 0)
+        act_4_answer_1 = act_4_state.get("act_4_answer_1", "")
+        act_4_answer_2 = act_4_state.get("act_4_answer_2", "")
+        act_4_type = act_4_meta.get("act_4_type", "unclear")
+        last_act_4_state = act_4_state.get("last_act_4", "")
 
         # Extract summary info
         summary_block = stage_meta.get("summary", {}) or {}
@@ -2697,42 +3060,41 @@ class Supervisor:
 
             # Extracted variables for easy access by supervisor LLM
             "last_agent": state.get("last_agent", "") or "",
-
+            "hook_status": hook_status,
             # Intent variables
-            "intent_status": intent_status,
-            "intent_turn": str(intent_turn),
+            "act_1_status": act_1_status,
+            "act_1_turn": str(act_1_turn),
 
             # Tone variables
-            "confirm_tone": confirm_tone,
-            "tone_turn": str(tone_turn),
-            "emo_tone_1": emo_tone_1,
-            "emo_tone_2": emo_tone_2,
-            "emo_tone": emo_tone,
+            "confirm_act_2": confirm_act_2,
+            "act_2_turn": str(act_2_turn),
+            "act_2_emo_1": act_2_emo_1,
+            "act_2_emo_2": act_2_emo_2,
+            "act_2_emo_tone": act_2_emo_tone,
 
             # Motivation variables
-            "confirm_motivation": confirm_motivation,
-            "motivation_turn": str(motivation_turn),
-            "motivation_1": motivation_1,
-            "motivation_2": motivation_2,
-            "motivation_3": motivation_3,
-            "motivation_4": motivation_4,
-            "motivation_type": motivation_type,
+            "confirm_act_3": confirm_act_3,
+            "act_3_turn": str(act_3_turn),
+            "act_3_answer_1": act_3_answer_1,
+            "act_3_answer_2": act_3_answer_2,
+            "act_3_answer_3": act_3_answer_3,
+            "act_3_answer_4": act_3_answer_4,
+            "act_3_type": act_3_type,
 
             # Barriers variables
-            "confirm_barriers": confirm_barriers,
-            "barriers_turn": str(barriers_turn),
-            "barrier_1": barrier_1,
-            "barrier_2": barrier_2,
-            "barrier_3": barrier_3,
-            "barrier_4": barrier_4,
-            "barrier_type": barrier_type,
+            "confirm_act_4": confirm_act_4,
+            "act_4_turn": str(act_4_turn),
+            "act_4_answer_1": act_4_answer_1,
+            "act_4_answer_2": act_4_answer_2,
+            "act_4_type": act_4_type,
+
+
 
             # Summary variables
             "confirm_summary": confirm_summary,
             "summary_turn": str(summary_turn),
 
         }
-
 
     def prepare_messages(self, ctx: Dict[str, str]) -> List[BaseMessage]:
             """
@@ -2843,22 +3205,22 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
 
         # Read tone status from stage_meta (if present)
         stage_meta = state.get("stage_meta", {}) or {}
-        tone_block = stage_meta.get("connection_tone", {}) or {}
-        tone_meta = tone_block.get("metadata", {}) or {}
+        act_2_block = stage_meta.get("connection_tone", {}) or {}
+        act_2_meta = act_2_block.get("metadata", {}) or {}
 
         # New tone fields you want to use
-        tone_status = (tone_meta.get("confirm_tone") or "").lower()
-        # tone_status: "" or "unclear" means tone not finalized
+        act_2_status = (act_2_meta.get("confirm_act_2") or "").lower()
+        # act_2_status: "" or "unclear" means tone not finalized
 
         # 🔒 HARD RULE:
         # If supervisor tries to FINISH but tone is not confirmed yet,
         # FORCE it to go to connection_tone instead (if that agent exists).
-        if nxt in ("finish", "end") and tone_status in ("", "unclear"):
+        if nxt in ("finish", "end") and act_2_status in ("", "unclear"):
             if "connection_tone" in main_keys:
-                print("DEBUG ROUTER - Overriding FINISH → connection_tone because confirm_tone is not clear.")
+                print("DEBUG ROUTER - Overriding FINISH → connection_tone because confirm_act_2 is not clear.")
                 return "connection_tone"
 
-        # Normal FINISH handling (only when tone_status is clear or we don't care)
+        # Normal FINISH handling (only when act_2_status is clear or we don't care)
         if nxt in ("finish", "end"):
             return "END"
 
@@ -2918,33 +3280,33 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
     }
 
     #  Ensure tone block and emo fields exist BEFORE graph.invoke
-    state = ensure_tone_block(state)
+    state = ensure_act_2_block(state)
     # Update intent metadata if user answered an intent question
     last_agent = state.get("last_agent", "")
     print(f"🔍 DEBUG - Full state keys: {list(state.keys())}")  # ADD THIS
     print(f"🔍 DEBUG - process_user_message: last_agent='{last_agent}', msg='{msg}'")  # ADD THIS
 
     # Update intent metadata if user answered an intent question
-    if last_agent == "connection_intent" and msg:
-        state = update_intent_metadata_after_answer(state, msg)
+    if last_agent == "act_1" and msg:
+        state = update_act_1_metadata_after_answer(state, msg)
         print(
-            f"DEBUG - After intent metadata update: confirm_intent={state.get('stage_meta', {}).get('connection_intent', {}).get('metadata', {}).get('confirm_intent')}")
+            f"DEBUG - After intent metadata update: confirm_act_1={state.get('stage_meta', {}).get('act_1', {}).get('metadata', {}).get('confirm_act_1')}")
 
     # Update emotional tone metadata if user answered an emotional tone question
-    if last_agent == "emotional_tone" and msg:
-        state = update_emotional_tone_metadata_after_answer(state, msg)
+    if last_agent == "act_2" and msg:
+        state = update_act_2_metadata_after_answer(state, msg)
         print(
-            f"DEBUG - After emotional tone metadata update: confirm_tone={state.get('stage_meta', {}).get('emotional_tone', {}).get('metadata', {}).get('confirm_tone')}")
+            f"DEBUG - After emotional tone metadata update: confirm_act_2={state.get('stage_meta', {}).get('act_2', {}).get('metadata', {}).get('confirm_act_2')}")
         # Update motivation metadata if user answered a motivation question
-    if last_agent == "motivation" and msg:
-        state = update_motivation_metadata_after_answer(state, msg)
+    if last_agent == "act_3" and msg:
+        state = update_act_3_metadata_after_answer(state, msg)
         print(
-            f"DEBUG - After motivation metadata update: confirm_motivation={state.get('stage_meta', {}).get('motivation', {}).get('metadata', {}).get('confirm_motivation')}")
+            f"DEBUG - After motivation metadata update: confirm_act_3={state.get('stage_meta', {}).get('act_3', {}).get('metadata', {}).get('confirm_act_3')}")
         # Update barriers metadata if user answered a barriers question
-    if last_agent == "barriers" and msg:
-        state = update_barriers_metadata_after_answer(state, msg)
+    if last_agent == "act_4" and msg:
+        state = update_act_4_metadata_after_answer(state, msg)
         print(
-            f"DEBUG - After barriers metadata update: confirm_barriers={state.get('stage_meta', {}).get('barriers', {}).get('metadata', {}).get('confirm_barriers')}")
+            f"DEBUG - After barriers metadata update: confirm_act_4={state.get('stage_meta', {}).get('act_4', {}).get('metadata', {}).get('confirm_act_4')}")
     new_state = graph.invoke(state)
     # Extract the AI's response text from the new messages
     new_messages = new_state.get("messages", [])
@@ -2985,14 +3347,19 @@ def _init_session():
             agent_index=0,
             exchanges_with_current=0,
             last_agent="",
-            stage_meta={},  # we'll fill connection_tone inside ensure_tone_block
+            stage_meta={
+                "hook": {
+                    "metadata": {"hook_status": "unclear", "hook_text": ""},
+                    "state": {"hook_displayed": False}
+                }
+            },
             last_options=[],
             ad_data=st.session_state.ad_data,
             user_profile={},
         )
 
-        # ✅ make sure connection_tone + emo_tone_type + confirm_tone exist from the start
-        base_state = ensure_tone_block(base_state)
+        # ✅ make sure connection_tone + emo_act_2_type + confirm_act_2 exist from the start
+        base_state = ensure_act_2_block(base_state)
 
         st.session_state.state = base_state
 
@@ -3025,75 +3392,263 @@ def main():
         st.markdown("---")
 
         st.markdown("---")
-        st.header("Collected Info")
-        for k, v in st.session_state.state.get("collected_info", {}).items():
-            st.markdown(f"**{k}** ({len(v)})")
-            for i, it in enumerate(v[-5:]):
-                st.write(f"- {i + 1}. {it}")
-
-        st.markdown("---")
         st.header("Conversation Insights")
         meta = st.session_state.state.get("stage_meta", {}) or {}
 
-        # Intent block (connection_intent)
-        intent_block = meta.get("connection_intent", {}) or {}
-        intent_meta = intent_block.get("metadata", {}) or {}
-        intent_state = intent_block.get("state", {}) or {}
+        # Hook block
+        hook_block = meta.get("hook", {}) or {}
+        hook_meta = hook_block.get("metadata", {}) or {}
+        hook_status = hook_meta.get("hook_status", "unclear")
+        hook_text = hook_meta.get("hook_text", "—")
 
-        # Tone block (emotional_tone) - CHECK BOTH emotional_tone AND connection_tone
-        tone_block = meta.get("emotional_tone", {}) or meta.get("connection_tone", {}) or {}
-        tone_meta = tone_block.get("metadata", {}) or {}
-        tone_state = tone_block.get("state", {}) or {}
+        st.markdown("**🎣 Hook:**")
+        st.markdown(f"- **Status:** {hook_status}")
+        if hook_text != "—":
+            st.markdown(f"- **Message:** {hook_text[:100]}...")  # Show first 100 chars
+        st.markdown("---")
 
-        # Motivation block
-        motivation_block = meta.get("motivation", {}) or {}
-        motivation_meta = motivation_block.get("metadata", {}) or {}
-        motivation_state = motivation_block.get("state", {}) or {}
+        # Intent block (act_1)
+        act_1_block = meta.get("act_1", {}) or {}
+        act_1_meta = act_1_block.get("metadata", {}) or {}
+        act_1_state = act_1_block.get("state", {}) or {}
 
-        # Barriers block
-        barriers_block = meta.get("barriers", {}) or {}
-        barriers_meta = barriers_block.get("metadata", {}) or {}
-        barriers_state = barriers_block.get("state", {}) or {}
+        # Tone block (act_2) - CHECK BOTH act_2 AND connection_tone
+        act_2_block = meta.get("act_2", {}) or meta.get("connection_tone", {}) or {}
+        act_2_meta = act_2_block.get("metadata", {}) or {}
+        act_2_state = act_2_block.get("state", {}) or {}
+
+        # Motivation block (act_3)
+        act_3_block = meta.get("act_3", {}) or {}
+        act_3_meta = act_3_block.get("metadata", {}) or {}
+        act_3_state = act_3_block.get("state", {}) or {}
+
+        # Barriers block (act_4)
+        act_4_block = meta.get("act_4", {}) or {}
+        act_4_meta = act_4_block.get("metadata", {}) or {}
+        act_4_state = act_4_block.get("state", {}) or {}
 
         # Intent fields
-        intent_status = intent_meta.get("confirm_intent") or intent_meta.get("intent_status", "—")
-        intent_type = intent_meta.get("intent_type", "—")
+        act_1_status = act_1_meta.get("confirm_act_1") or act_1_meta.get("act_1_status", "—")
+        act_1_type = act_1_meta.get("act_1_type", "—")
 
         # Tone fields
-        confirm_tone = tone_meta.get("confirm_tone") or "unclear"
-        tone_type = tone_meta.get("emo_tone") or tone_meta.get("emo_tone_type") or "—"
-        emo_tone_1 = tone_state.get("emo_tone_1") or "—"
-        emo_tone_2 = tone_state.get("emo_tone_2") or "—"
-        emo_tone_3 = tone_state.get("emo_tone_3") or "—"
+        confirm_act_2 = act_2_meta.get("confirm_act_2") or "unclear"
+        act_2_type = act_2_meta.get("act_2_emo_tone") or act_2_meta.get("emo_act_2_type") or "—"
+        act_2_emo_1 = act_2_state.get("act_2_emo_1") or "—"
+        act_2_emo_2 = act_2_state.get("act_2_emo_2") or "—"
+        act_2_emo_3 = act_2_state.get("act_2_emo_3") or "—"
 
         # Motivation fields
-        confirm_motivation = motivation_meta.get("confirm_motivation") or "unclear"
-        motivation_type = motivation_meta.get("motivation_type", "—")
-        motivation_1 = motivation_state.get("motivation_1") or "—"
-        motivation_2 = motivation_state.get("motivation_2") or "—"
-        motivation_3 = motivation_state.get("motivation_3") or "—"
-        motivation_4 = motivation_state.get("motivation_4") or "—"
+        confirm_act_3 = act_3_meta.get("confirm_act_3") or "unclear"
+        act_3_type = act_3_meta.get("act_3_type", "—")
+        act_3_answer_1 = act_3_state.get("act_3_answer_1") or "—"
+        act_3_answer_2 = act_3_state.get("act_3_answer_2") or "—"
+        act_3_answer_3 = act_3_state.get("act_3_answer_3") or "—"
+        act_3_answer_4 = act_3_state.get("act_3_answer_4") or "—"
 
         # Barriers fields
-        confirm_barriers = barriers_meta.get("confirm_barriers") or "unclear"
-        barrier_type = barriers_meta.get("barrier_type", "—")
-        barrier_1 = barriers_state.get("barrier_1") or "—"
-        barrier_2 = barriers_state.get("barrier_2") or "—"
-        barrier_3 = barriers_state.get("barrier_3") or "—"
-        barrier_4 = barriers_state.get("barrier_4") or "—"
+        confirm_act_4 = act_4_meta.get("confirm_act_4") or "unclear"
+        act_4_type = act_4_meta.get("act_4_type", "—")
+        act_4_answer_1 = act_4_state.get("act_4_answer_1") or "—"
+        act_4_answer_2 = act_4_state.get("act_4_answer_2") or "—"
+        act_4_answer_3 = act_4_state.get("act_4_answer_3") or "—"
+        act_4_answer_4 = act_4_state.get("act_4_answer_4") or "—"
 
         # Display insights
-        st.markdown(f"- **Confirm Intent:** {intent_status or '—'}")
-        st.markdown(f"- **Intent Type:** {intent_type or '—'}")
+        st.markdown(f"- **Confirm Act 1:** {act_1_status or '—'}")
+        st.markdown(f"- **Act 1 Type:** {act_1_type or '—'}")
 
-        st.markdown(f"- **Confirm Tone:** {confirm_tone}")
-        st.markdown(f"- **Tone Type:** {tone_type}")
+        # Act 1 Details - NEW SECTION
+        st.markdown("---")
+        st.markdown("**🎯 Act 1 Details:**")
 
-        st.markdown(f"- **Confirm Motivation:** {confirm_motivation}")
-        st.markdown(f"- **Motivation Type:** {motivation_type}")
+        # Define variables first (get them from act_1_state)
+        current_turn = act_1_state.get("turn", 0)
+        last_theme = act_1_state.get("last_theme", "—")
 
-        st.markdown(f"- **Confirm Barriers:** {confirm_barriers}")
-        st.markdown(f"- **Barrier Type:** {barrier_type}")
+        # Compute question_mode for CURRENT question being displayed
+        if current_turn == 0:
+            question_mode = "—"
+            focus_type = "—"
+        elif current_turn == 1:
+            question_mode = "broad"
+            focus_type = "aspiration"
+        elif current_turn == 2:
+            question_mode = "focused"
+            focus_type = "aspiration"
+        elif current_turn == 3:
+            question_mode = "broad"
+            focus_type = "identity"
+        elif current_turn == 4:
+            question_mode = "focused"
+            focus_type = "identity"
+        else:
+            question_mode = "—"
+            focus_type = "—"
+
+        # Now display them
+        st.markdown(f"- **Current Turn:** {current_turn}")
+        st.markdown(f"- **Last Theme:** {last_theme}")
+        st.markdown(f"- **Question Mode (current question):** {question_mode}")
+        st.markdown(f"- **Focus Type (current question):** {focus_type}")
+
+        # Show individual answers (as mappings) if available
+        theme_1 = act_1_state.get("theme_1", "—")
+        theme_2 = act_1_state.get("theme_2", "—")
+        theme_3 = act_1_state.get("theme_3", "—")
+        theme_4 = act_1_state.get("theme_4", "—")
+
+        if any([theme_1 != "—", theme_2 != "—", theme_3 != "—", theme_4 != "—"]):
+            st.markdown("**Answers:**")
+            if theme_1 != "—":
+                st.markdown(f"  - Q1: {theme_1}")
+            if theme_2 != "—":
+                st.markdown(f"  - Q2: {theme_2}")
+            if theme_3 != "—":
+                st.markdown(f"  - Q3: {theme_3}")
+            if theme_4 != "—":
+                st.markdown(f"  - Q4: {theme_4}")
+
+        st.markdown("---")
+
+        # Act 2 section
+        st.markdown("**😊 Act 2 Details:**")
+
+        # Get Act 2 turn info
+        act_2_turn = act_2_state.get("turn", 0)
+        act_2_last_theme = act_2_state.get("last_theme", "—")
+
+        # Compute question_mode for CURRENT question being displayed
+        if act_2_turn == 0:
+            act_2_question_mode = "—"
+            act_2_focus_type = "—"
+        elif act_2_turn == 1:
+            act_2_question_mode = "broad"
+            act_2_focus_type = "learning"
+        elif act_2_turn == 2:
+            act_2_question_mode = "focused"
+            act_2_focus_type = "learning"
+        elif act_2_turn == 3:
+            act_2_question_mode = "broad"
+            act_2_focus_type = "engagement"
+        elif act_2_turn == 4:
+            act_2_question_mode = "focused"
+            act_2_focus_type = "engagement"
+        else:
+            act_2_question_mode = "—"
+            act_2_focus_type = "—"
+
+        st.markdown(f"- **Current Turn:** {act_2_turn}")
+        st.markdown(f"- **Last Theme:** {act_2_last_theme}")
+        st.markdown(f"- **Question Mode (current question):** {act_2_question_mode}")
+        st.markdown(f"- **Focus Type (current question):** {act_2_focus_type}")
+        st.markdown(f"- **Confirm Act 2:** {confirm_act_2}")
+        st.markdown(f"- **Act 2 Type:** {act_2_type}")
+
+        # Show individual answers (as mappings) if available
+        act_2_emo_1 = act_2_state.get("act_2_emo_1", "—")
+        act_2_emo_2 = act_2_state.get("act_2_emo_2", "—")
+        act_2_emo_3 = act_2_state.get("act_2_emo_3", "—")
+        act_2_emo_4 = act_2_state.get("act_2_emo_4", "—")
+
+        if any([act_2_emo_1 != "—", act_2_emo_2 != "—", act_2_emo_3 != "—", act_2_emo_4 != "—"]):
+            st.markdown("**Answers:**")
+            if act_2_emo_1 != "—":
+                st.markdown(f"  - Q1: {act_2_emo_1}")
+            if act_2_emo_2 != "—":
+                st.markdown(f"  - Q2: {act_2_emo_2}")
+            if act_2_emo_3 != "—":
+                st.markdown(f"  - Q3: {act_2_emo_3}")
+            if act_2_emo_4 != "—":
+                st.markdown(f"  - Q4: {act_2_emo_4}")
+
+        st.markdown("---")
+
+        # Act 3 section
+        st.markdown("**💪 Act 3:**")
+
+        # Get Act 3 turn info
+        act_3_turn = act_3_state.get("turn", 0)
+        act_3_last_theme = act_3_state.get("last_theme", "—")
+
+        # Compute question_mode for CURRENT question being displayed
+        if act_3_turn == 0:
+            act_3_question_mode = "—"
+            act_3_focus_type = "—"
+        elif act_3_turn == 1:
+            act_3_question_mode = "broad"
+            act_3_focus_type = "internal_fear"
+        elif act_3_turn == 2:
+            act_3_question_mode = "focused"
+            act_3_focus_type = "internal_fear"
+        elif act_3_turn == 3:
+            act_3_question_mode = "broad"
+            act_3_focus_type = "emotional_pattern"
+        elif act_3_turn == 4:
+            act_3_question_mode = "focused"
+            act_3_focus_type = "emotional_pattern"
+        else:
+            act_3_question_mode = "—"
+            act_3_focus_type = "—"
+
+        st.markdown(f"- **Current Turn:** {act_3_turn}")
+        st.markdown(f"- **Last Theme:** {act_3_last_theme}")
+        st.markdown(f"- **Question Mode:** {act_3_question_mode}")
+        st.markdown(f"- **Focus Type:** {act_3_focus_type}")
+        st.markdown(f"- **Confirm Act 3:** {confirm_act_3}")
+        st.markdown(f"- **Act 3 Type:** {act_3_type}")
+
+        # Show individual answers if available
+        if any([act_3_answer_1 != "—", act_3_answer_2 != "—", act_3_answer_3 != "—", act_3_answer_4 != "—"]):
+            st.markdown("**Answers:**")
+            if act_3_answer_1 != "—":
+                st.markdown(f"  - Q1: {act_3_answer_1}")
+            if act_3_answer_2 != "—":
+                st.markdown(f"  - Q2: {act_3_answer_2}")
+            if act_3_answer_3 != "—":
+                st.markdown(f"  - Q3: {act_3_answer_3}")
+            if act_3_answer_4 != "—":
+                st.markdown(f"  - Q4: {act_3_answer_4}")
+
+        st.markdown("---")
+
+        # Act 4 section
+        st.markdown("**🚧 Act 4:**")
+
+        # Get Act 4 turn info
+        act_4_turn = act_4_state.get("turn", 0)
+        act_4_last_theme = act_4_state.get("last_theme", "—")
+
+        # Compute question_mode for CURRENT question being displayed
+        if act_4_turn == 0:
+            act_4_question_mode = "—"
+            act_4_focus_type = "—"
+        elif act_4_turn == 1:
+            act_4_question_mode = "broad"
+            act_4_focus_type = "support"
+        elif act_4_turn == 2:
+            act_4_question_mode = "focused"
+            act_4_focus_type = "support"
+        else:
+            act_4_question_mode = "—"
+            act_4_focus_type = "—"
+
+        st.markdown(f"- **Current Turn:** {act_4_turn}")
+        st.markdown(f"- **Last Theme:** {act_4_last_theme}")
+        st.markdown(f"- **Question Mode:** {act_4_question_mode}")
+        st.markdown(f"- **Focus Type:** {act_4_focus_type}")
+        st.markdown(f"- **Confirm Act 4:** {confirm_act_4}")
+        st.markdown(f"- **Act 4 Type:** {act_4_type}")
+
+        # Show individual answers if available
+        if any([act_4_answer_1 != "—", act_4_answer_2 != "—"]):
+            st.markdown("**Answers:**")
+            if act_4_answer_1 != "—":
+                st.markdown(f"  - Q1: {act_4_answer_1}")
+            if act_4_answer_2 != "—":
+                st.markdown(f"  - Q2: {act_4_answer_2}")
+
+        st.markdown("---")
         # Summary block
         summary_block = meta.get("summary", {}) or {}
         summary_meta = summary_block.get("metadata", {}) or {}
@@ -3102,111 +3657,6 @@ def main():
         confirm_summary = summary_meta.get("confirm_summary") or "unclear"
 
         st.markdown(f"- **Confirm Summary:** {confirm_summary}")
-        # Optional: show separate debug states
-        st.markdown("---")
-        st.markdown("**Debug States:**")
-
-        # INTENT STATE - Remove intent_mapping and options
-        intent_state_clean = {k: v for k, v in intent_state.items() if k not in ['intent_mapping', 'options']}
-        st.markdown(f"- **INTENT STATE:** {json.dumps(intent_state_clean, ensure_ascii=False)}")
-
-        # TONE STATE - Remove emotional_mapping and options
-        # TONE STATE - Remove emotional_mapping and options
-        tone_state_clean = {k: v for k, v in tone_state.items() if k not in ['emotional_mapping', 'options']}
-        st.markdown(f"- **TONE STATE:** {json.dumps(tone_state_clean, ensure_ascii=False)}")
-
-        # Show individual emotional tone answers with format information
-        if any([emo_tone_1 != "—", emo_tone_2 != "—"]):
-            st.markdown("**Emotional Tone Answers:**")
-
-            # Get response formats
-            response_format_1 = tone_state.get("response_format_1", "")
-            response_format_2 = tone_state.get("response_format_2", "")
-            scale_range = tone_state.get("scale_range", "")
-            scale_mapping = tone_state.get("scale_mapping", {})
-
-            # Question 1
-            if emo_tone_1 != "—":
-                if response_format_1 == "scale":
-                    # For scale responses, show value + interpretation
-                    st.markdown(f"  - **Tone Q1 (Scale {scale_range}):** {emo_tone_1}")
-
-                    # Interpret the scale value
-                    if scale_mapping and emo_tone_1.isdigit():
-                        scale_value = int(emo_tone_1)
-                        interpreted_category = "—"
-
-                        # Find which range this value falls into
-                        for range_str, category in scale_mapping.items():
-                            if "-" in range_str:
-                                min_val, max_val = map(int, range_str.split("-"))
-                                if min_val <= scale_value <= max_val:
-                                    interpreted_category = category
-                                    break
-
-                        st.markdown(f"    → Interpreted as: **{interpreted_category}**")
-                else:
-                    # For multiple_choice or yes_no
-                    format_label = response_format_1 if response_format_1 else "multiple_choice"
-                    st.markdown(f"  - **Tone Q1 ({format_label}):** {emo_tone_1}")
-
-            # Question 2
-            if emo_tone_2 != "—":
-                if response_format_2 == "scale":
-                    # For scale responses, show value + interpretation
-                    st.markdown(f"  - **Tone Q2 (Scale {scale_range}):** {emo_tone_2}")
-
-                    # Interpret the scale value
-                    if scale_mapping and emo_tone_2.isdigit():
-                        scale_value = int(emo_tone_2)
-                        interpreted_category = "—"
-
-                        # Find which range this value falls into
-                        for range_str, category in scale_mapping.items():
-                            if "-" in range_str:
-                                min_val, max_val = map(int, range_str.split("-"))
-                                if min_val <= scale_value <= max_val:
-                                    interpreted_category = category
-                                    break
-
-                        st.markdown(f"    → Interpreted as: **{interpreted_category}**")
-                else:
-                    # For multiple_choice or yes_no
-                    format_label = response_format_2 if response_format_2 else "multiple_choice"
-                    st.markdown(f"  - **Tone Q2 ({format_label}):** {emo_tone_2}")
-
-        # MOTIVATION STATE - Remove motivation_mapping and options
-        motivation_state_clean = {k: v for k, v in motivation_state.items() if
-                                  k not in ['motivation_mapping', 'options']}
-        st.markdown(f"- **MOTIVATION STATE:** {json.dumps(motivation_state_clean, ensure_ascii=False)}")
-
-        # Show individual motivation answers clearly
-        if any([motivation_1 != "—", motivation_2 != "—", motivation_3 != "—", motivation_4 != "—"]):
-            st.markdown("**Motivation Answers:**")
-            if motivation_1 != "—":
-                st.markdown(f"  - Motivation 1: {motivation_1}")
-            if motivation_2 != "—":
-                st.markdown(f"  - Motivation 2: {motivation_2}")
-            if motivation_3 != "—":
-                st.markdown(f"  - Motivation 3: {motivation_3}")
-            if motivation_4 != "—":
-                st.markdown(f"  - Motivation 4: {motivation_4}")
-
-        # BARRIERS STATE - Remove barriers_mapping and options
-        barriers_state_clean = {k: v for k, v in barriers_state.items() if k not in ['barriers_mapping', 'options']}
-        st.markdown(f"- **BARRIERS STATE:** {json.dumps(barriers_state_clean, ensure_ascii=False)}")
-
-        # Show individual barrier answers clearly
-        if any([barrier_1 != "—", barrier_2 != "—", barrier_3 != "—", barrier_4 != "—"]):
-            st.markdown("**Barrier Answers:**")
-            if barrier_1 != "—":
-                st.markdown(f"  - Barrier 1: {barrier_1}")
-            if barrier_2 != "—":
-                st.markdown(f"  - Barrier 2: {barrier_2}")
-            if barrier_3 != "—":
-                st.markdown(f"  - Barrier 3: {barrier_3}")
-            if barrier_4 != "—":
-                st.markdown(f"  - Barrier 4: {barrier_4}")
 
         if st.button("Reset conversation"):
             # Clear state and chat history, then rerun app
@@ -3230,34 +3680,48 @@ def main():
     # Show chat history
     for t in st.session_state.chat_history:
         with st.chat_message(t["role"]):
-            st.markdown(t["content"])
+            st.markdown(t["content"], unsafe_allow_html=True)
 
     # ========== CHECK IF CONVERSATION IS COMPLETE ==========
     stage_meta = st.session_state.state.get("stage_meta", {}) or {}
 
+    # Check hook status
+    hook_block = stage_meta.get("hook", {}) or {}
+    hook_meta = hook_block.get("metadata", {}) or {}
+    hook_status = hook_meta.get("hook_status", "unclear")
+
     # Check intent status
-    intent_block = stage_meta.get("connection_intent", {}) or {}
-    intent_meta = intent_block.get("metadata", {}) or {}
-    confirm_intent = intent_meta.get("confirm_intent", "unclear")
-    intent_type = intent_meta.get("intent_type", "")
+    act_1_block = stage_meta.get("act_1", {}) or {}
+    act_1_meta = act_1_block.get("metadata", {}) or {}
+    confirm_act_1 = act_1_meta.get("confirm_act_1", "unclear")
+    act_1_type = act_1_meta.get("act_1_type", "")
 
     # Check emotional tone status - try emotional_tone first, fallback to connection_tone
-    tone_block = stage_meta.get("emotional_tone", {}) or stage_meta.get("connection_tone", {}) or {}
-    tone_meta = tone_block.get("metadata", {}) or {}
-    confirm_tone = tone_meta.get("confirm_tone", "unclear")
-    emo_tone = tone_meta.get("emo_tone", "")
+    act_2_block = stage_meta.get("act_2", {}) or stage_meta.get("connection_tone", {}) or {}
+    act_2_meta = act_2_block.get("metadata", {}) or {}
+    confirm_act_2 = act_2_meta.get("confirm_act_2", "unclear")
+    act_2_emo_tone = act_2_meta.get("act_2_emo_tone", "")
 
     # Check motivation status
-    motivation_block = stage_meta.get("motivation", {}) or {}
-    motivation_meta = motivation_block.get("metadata", {}) or {}
-    confirm_motivation = motivation_meta.get("confirm_motivation", "unclear")
-    motivation_type = motivation_meta.get("motivation_type", "")
+    act_3_block = stage_meta.get("act_3", {}) or {}
+    act_3_meta = act_3_block.get("metadata", {}) or {}
+    confirm_act_3 = act_3_meta.get("confirm_act_3", "unclear")
+    act_3_type = act_3_meta.get("act_3_type", "")
+    act_1_block = stage_meta.get("act_1", {}) or {}
+    act_1_state = act_1_block.get("state", {}) or {}
+    act1_identity = act_1_state.get("theme_3", "")  # Identity from Q3
+    # Get Act 2 derived psychographic fields
+    act_2_block = stage_meta.get("act_2", {}) or {}
+    act_2_state = act_2_block.get("state", {}) or {}
 
+    act2_learning_style = act_2_state.get("act2_learning_style", "")
+    act2_engagement_style = act_2_state.get("act2_engagement_style", "")
+    act2_final_tone = act_2_state.get("act2_final_tone", "")
     # Check barriers status
-    barriers_block = stage_meta.get("barriers", {}) or {}
-    barriers_meta = barriers_block.get("metadata", {}) or {}
-    confirm_barriers = barriers_meta.get("confirm_barriers", "unclear")
-    barrier_type = barriers_meta.get("barrier_type", "")
+    act_4_block = stage_meta.get("act_4", {}) or {}
+    act_4_meta = act_4_block.get("metadata", {}) or {}
+    confirm_act_4 = act_4_meta.get("confirm_act_4", "unclear")
+    act_4_type = act_4_meta.get("act_4_type", "")
 
     # Conversation is complete when all four are clear
     # Check summary status
@@ -3268,8 +3732,8 @@ def main():
     recommendations = summary_meta.get("recommendations", [])
 
     # Conversation is complete when all FIVE are clear (including summary)
-    conversation_ended = (confirm_intent == "clear" and confirm_tone == "clear" and
-                          confirm_motivation == "clear" and confirm_barriers == "clear" and
+    conversation_ended = (confirm_act_1 == "clear" and confirm_act_2 == "clear" and
+                          confirm_act_3 == "clear" and confirm_act_4 == "clear" and
                           confirm_summary == "clear")
 
     # ========== SHOW BUTTONS OR COMPLETION MESSAGE ==========
@@ -3277,7 +3741,7 @@ def main():
         # Show completion message
         st.success(f"✅ **Conversation Complete!**")
         st.info(
-            f"**Intent:** {intent_type} | **Emotional Tone:** {emo_tone} | **Motivation:** {motivation_type} | **Barrier:** {barrier_type}")
+            f"**Intent:** {act_1_type} | **Emotional Tone:** {act_2_emo_tone} | **Motivation:** {act_3_type} | **Barrier:** {act_4_type}")
 
         # Show summary if available
         if summary_text:
@@ -3293,6 +3757,28 @@ def main():
         st.markdown("---")
         st.markdown("We've captured your preferences and will tailor your experience accordingly. 🎉")
     else:
+        # Check if this is the hook message (no options)
+        stage_meta = st.session_state.state.get("stage_meta", {}) or {}
+        hook_block = stage_meta.get("hook", {}) or {}
+        hook_meta = hook_block.get("metadata", {}) or {}
+        hook_status = hook_meta.get("hook_status", "unclear")
+
+        # If hook just displayed and status is clear, automatically trigger next agent
+        if hook_status == "clear" and st.session_state.chat_history and st.session_state.chat_history[-1][
+            "role"] == "assistant":
+            last_msg_content = st.session_state.chat_history[-1]["content"]
+            # Check if this is the hook message (contains the hook text)
+            hook_text = hook_meta.get("hook_text", "")
+            if hook_text and hook_text in last_msg_content:
+                # Auto-trigger next turn (Act 1)
+                ai_text, new_state = process_user_message(
+                    st.session_state.graph, st.session_state.state, ""
+                )
+                st.session_state.state = new_state
+                if ai_text:
+                    st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
+                st.rerun()
+
         # Buttons/Input for current options (only if conversation is ongoing)
         options = st.session_state.state.get("last_options", []) or []
         if options and st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
@@ -3304,23 +3790,23 @@ def main():
                 last_agent = st.session_state.state.get("last_agent", "")
 
                 # Only check for flexible formats if emotional_tone agent is active
-                if last_agent == "emotional_tone":
+                if last_agent == "act_2":
                     # Check emotional_tone agent state for response format
-                    tone_block = stage_meta.get("emotional_tone", {}) or {}
-                    tone_state = tone_block.get("state", {}) or {}
-                    tone_turn = tone_state.get("turn", 0)
+                    act_2_block = stage_meta.get("act_2", {}) or {}
+                    act_2_state = act_2_block.get("state", {}) or {}
+                    act_2_turn = act_2_state.get("turn", 0)
 
                     # Get the response format for the current question
-                    if tone_turn == 1:
-                        response_format = tone_state.get("response_format_1", "multiple_choice")
-                    elif tone_turn == 2:
-                        response_format = tone_state.get("response_format_2", "multiple_choice")
+                    if act_2_turn == 1:
+                        response_format = act_2_state.get("response_format_1", "multiple_choice")
+                    elif act_2_turn == 2:
+                        response_format = act_2_state.get("response_format_2", "multiple_choice")
                     else:
                         response_format = "multiple_choice"
 
                     # Get scale info if needed
-                    scale_range = tone_state.get("scale_range", "")
-                    scale_labels = tone_state.get("scale_labels", {})
+                    scale_range = act_2_state.get("scale_range", "")
+                    scale_labels = act_2_state.get("scale_labels", {})
                 else:
                     # All other agents use standard multiple_choice format
                     response_format = "multiple_choice"
@@ -3328,8 +3814,8 @@ def main():
                     scale_labels = {}
 
                 # Get scale info if needed
-                scale_range = tone_state.get("scale_range", "")
-                scale_labels = tone_state.get("scale_labels", {})
+                scale_range = act_2_state.get("scale_range", "")
+                scale_labels = act_2_state.get("scale_labels", {})
 
                 user_response = None
 
@@ -3391,28 +3877,26 @@ def main():
 
                     # Check if conversation just ended
                     new_stage_meta = new_state.get("stage_meta", {}) or {}
-                    new_intent_meta = new_stage_meta.get("connection_intent", {}).get("metadata", {})
-                    new_tone_meta = new_stage_meta.get("emotional_tone", {}).get("metadata",
-                                                                                 {}) or new_stage_meta.get(
+                    new_act_1_meta = new_stage_meta.get("act_1", {}).get("metadata", {})
+                    new_act_2_meta = new_stage_meta.get("act_2", {}).get("metadata", {}) or new_stage_meta.get(
                         "connection_tone", {}).get("metadata", {})
-                    new_motivation_meta = new_stage_meta.get("motivation", {}).get("metadata", {})
-                    new_barriers_meta = new_stage_meta.get("barriers", {}).get("metadata", {})
+                    new_act_3_meta = new_stage_meta.get("act_3", {}).get("metadata", {})
+                    new_act_4_meta = new_stage_meta.get("act_4", {}).get("metadata", {})
 
-                    new_confirm_intent = new_intent_meta.get("confirm_intent", "unclear")
-                    new_confirm_tone = new_tone_meta.get("confirm_tone", "unclear")
-                    new_confirm_motivation = new_motivation_meta.get("confirm_motivation", "unclear")
-                    new_confirm_barriers = new_barriers_meta.get("confirm_barriers", "unclear")
+                    new_confirm_act_1 = new_act_1_meta.get("confirm_act_1", "unclear")
+                    new_confirm_act_2 = new_act_2_meta.get("confirm_act_2", "unclear")
+                    new_confirm_act_3 = new_act_3_meta.get("confirm_act_3", "unclear")
+                    new_confirm_act_4 = new_act_4_meta.get("confirm_act_4", "unclear")
 
                     # Check if conversation is complete (all 4 agents done)
-                    if (new_confirm_intent == "clear" and new_confirm_tone == "clear" and
-                            new_confirm_motivation == "clear" and new_confirm_barriers == "clear"):
+                    if (new_confirm_act_1 == "clear" and new_confirm_act_2 == "clear" and
+                            new_confirm_act_3 == "clear" and new_confirm_act_4 == "clear"):
                         # Don't add ai_text to history - we'll show completion message instead
                         pass
                     elif ai_text:
                         st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
 
                     st.rerun()
-
 
         # Free-text input (only if conversation is ongoing)
         prompt = st.chat_input("Type your message...")
@@ -3422,8 +3906,12 @@ def main():
             st.session_state.state = new_state
             st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
             with st.chat_message("assistant"):
-                st.markdown(ai_text)
+                st.markdown(ai_text, unsafe_allow_html=True)
             st.rerun()
+
 
 if __name__ == "__main__":
     main()
+
+
+
