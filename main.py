@@ -59,11 +59,49 @@ def format_hook_text(hook_text: str) -> str:
     if hook_text:
         return f"<span style='font-size:30px'>{hook_text}</span>"
     return ""
+
+
 def format_question_text(question_text: str) -> str:
     """Format question text with larger font size and center alignment."""
     if question_text:
         return f"<div style='text-align: center; font-size: 36px;'>{question_text}</div>"
     return ""
+
+
+def format_conversation_history(conversation_history: List[Dict[str, str]]) -> str:
+    """Format the last 4 turns of conversation history for prompt injection."""
+    print(f"DEBUG CONV HISTORY - Raw: {conversation_history}")  # ADD THIS
+    if not conversation_history:
+        return "No previous conversation."
+
+    formatted = []
+    for i, turn in enumerate(conversation_history[-4:], 1):  # Get last 4 turns
+        # Skip if turn is not a dictionary
+        if not isinstance(turn, dict):
+            continue
+
+        affirmation = turn.get('affirmation', '')
+        question = turn.get('question', '')
+        answer = turn.get('answer', '')
+
+        formatted.append(f"Turn {i}:")
+        if affirmation:
+            formatted.append(f"  Affirmation: {affirmation}")
+        if question:
+            formatted.append(f"  Question: {question}")
+        if answer:
+            formatted.append(f"  User Answer: {answer}")
+
+    if not formatted:
+        return "No previous conversation."
+
+    return "\n".join(formatted)
+
+# ============================================================================
+# AD DATA INTEGRATION
+# ============================================================================
+
+
 # ============================================================================
 # AD DATA INTEGRATION
 # ============================================================================
@@ -272,7 +310,7 @@ class AgentResponse(PydanticV1BaseModel):
             "Categories are agent-specific: intent categories for Act 1, emotional categories for Act 2, etc. "
             "Example: ['belonging', 'skill_growth', 'wellness', 'unsure']"
         ),
-        min_items=4,
+        min_items=0,
         max_items=4
     )
 
@@ -306,24 +344,51 @@ class ConnectionIntentResponse(PydanticV1BaseModel):
         min_length=10
     )
 
-    options: List[str] = PydanticV1Field(
-        ...,  # Required field
-        description="Exactly 4 answer options",
-        min_items=4,
-        max_items=4
+    response_format: str = PydanticV1Field(
+        default="multiple_choice",
+        description="Type of response: 'multiple_choice', 'either_or', 'scale', 'image_choice'"
     )
 
-    option_mapping: List[str] = PydanticV1Field(  # ← Renamed from act_1_mapping
-        ...,  # Required field - NO default!
+    # Make options optional for scale questions
+    options: Optional[List[str]] = PydanticV1Field(
+        default=None,
+        description="Answer options (4 for multiple_choice/image_choice, 2 for either_or, None for scale)"
+    )
+
+    option_mapping: Optional[List[str]] = PydanticV1Field(
+        default=None,
         description=(
-            "Exactly 4 intent categories matching the 4 options. "
-            "Each value must be one of: 'self_expression', 'wellness', 'skill_growth', 'ambition', 'belonging', 'unsure'. "
-            "Example: ['belonging', 'skill_growth', 'wellness', 'unsure']"
-        ),
-        min_items=4,
-        max_items=4
+            "Intent categories matching options. "
+            "Values: 'inspiration', 'exploration', 'confidence_progress', 'calm_wellbeing', "
+            "'routine_structure', 'self_expression', 'enrichment_purpose', "
+            "'creative_identity', 'confidence_identity', 'growth_identity', "
+            "'hands_on_identity', 'openness_identity', 'visibility_identity', "
+            "'capability_identity', 'discipline_identity', 'lifestyle_identity', 'unsure'. "
+            "Required for all formats except scale."
+        )
     )
 
+    # Scale-specific fields
+    scale_range: Optional[str] = PydanticV1Field(
+        default=None,
+        description="Scale range like '1-5' or '1-10' (only for scale format)"
+    )
+
+    scale_labels: Optional[Dict[str, str]] = PydanticV1Field(
+        default=None,
+        description="Optional labels for scale endpoints, e.g., {'min': 'Not at all', 'max': 'Very much'}"
+    )
+
+    scale_mapping: Optional[Dict[str, str]] = PydanticV1Field(
+        default=None,
+        description="Mapping of number ranges to intent categories. Keys are ranges like '1-3', '4-7', values are categories. Only for scale format."
+    )
+
+    # Image-specific fields
+    image_urls: Optional[List[str]] = PydanticV1Field(
+        default=None,
+        description="Image URLs for image_choice format (4 images matching 4 options)"
+    )
     class Config:
         extra = "forbid"
 
@@ -722,12 +787,49 @@ def update_act_1_metadata_after_answer(state: AgentState, user_answer: str) -> A
     # Get current turn (which question did they just answer?)
     current_turn = act_1_state.get("turn", 0)
 
-    # Only process if we have a mapping and the user actually answered
-    if not prev_option_mapping or not user_answer:
+    # Only process if the user actually answered
+    if not user_answer:
         return state
 
-    # Classify the user's answer
-    chosen_act_1 = get_user_chosen_act_1(user_answer, prev_options, prev_option_mapping)
+    # Get response format for current turn
+    if current_turn == 1:
+        response_format = act_1_state.get("response_format_1", "multiple_choice")
+    elif current_turn == 2:
+        response_format = act_1_state.get("response_format_2", "multiple_choice")
+    elif current_turn == 3:
+        response_format = act_1_state.get("response_format_3", "multiple_choice")
+    elif current_turn == 4:
+        response_format = act_1_state.get("response_format_4", "multiple_choice")
+    else:
+        response_format = "multiple_choice"
+
+    # Classify the user's answer based on format
+    chosen_act_1 = ""
+
+    if response_format == "scale":
+        # For scale questions, use scale_mapping
+        scale_mapping = act_1_state.get("scale_mapping", {})
+        if scale_mapping and user_answer.isdigit():
+            scale_value = int(user_answer)
+
+            # Find which range this value falls into
+            for range_str, category in scale_mapping.items():
+                if "-" in range_str:
+                    min_val, max_val = map(int, range_str.split("-"))
+                    if min_val <= scale_value <= max_val:
+                        chosen_act_1 = category
+                        break
+                elif range_str.isdigit() and int(range_str) == scale_value:
+                    # Exact match (e.g., "5": "exploration")
+                    chosen_act_1 = category
+                    break
+    else:
+        # For multiple_choice, either_or, and image_choice, use option_mapping
+        prev_option_mapping = act_1_state.get("option_mapping", [])
+        prev_options = act_1_state.get("options", [])
+
+        if prev_option_mapping and prev_options:
+            chosen_act_1 = get_user_chosen_act_1(user_answer, prev_options, prev_option_mapping)
 
     print(
         f"DEBUG - update_act_1_metadata_after_answer: turn={current_turn}, user_answer='{user_answer}', chosen_act_1='{chosen_act_1}'")
@@ -1495,6 +1597,7 @@ class AgentState(TypedDict, total=False):
 
     # Persistent, cross-agent user profile.
     user_profile: Dict[str, Any]
+    conversation_history: List[Dict[str, str]]  # Track last 4 Q&A turns
 def compute_final_intent_from_state(
     state_block: Dict[str, Any],
     ad_theme: str,
@@ -1595,6 +1698,10 @@ class BaseAgent(ABC):
 
         state_json_str = json.dumps(my_state, ensure_ascii=False, indent=2)
 
+        # Format conversation history for prompt injection
+        conversation_history = state.get("conversation_history", [])
+        formatted_history = format_conversation_history(conversation_history)
+
         # Determine selected_option
         selected_option = ""
         if history:
@@ -1610,6 +1717,7 @@ class BaseAgent(ABC):
             "state_json": state_json_str,
             "selected_option": selected_option,
             "ad_theme": ad_data.get("ad_theme", ""),
+            "conversation_history": formatted_history,
         }
 
         # FOR HOOK AGENT: provide ad context
@@ -1972,8 +2080,8 @@ class BaseAgent(ABC):
                 try:
                     strict_response: ConnectionIntentResponse = structured_llm.invoke(msgs)
                     print(f"✅ DEBUG ACT_1 - Validation PASSED")
-                    print(f"   Options count: {len(strict_response.options)}")
-                    print(f"   Mapping count: {len(strict_response.option_mapping)}")
+                    print(f"   Options count: {len(strict_response.options or [])}")
+                    print(f"   Mapping count: {len(strict_response.option_mapping or [])}")
                     print(f"   Options: {strict_response.options}")
                     print(f"   Mapping: {strict_response.option_mapping}")
                 except Exception as e:
@@ -1988,12 +2096,37 @@ class BaseAgent(ABC):
                     raise e  # Re-raise to trigger fallback
 
                 # Convert to AgentResponse format
+                # Store response_format and format-specific data in metadata
+                act_1_metadata = {
+                    "response_format": strict_response.response_format
+                }
+
+                # Add scale-specific fields if this is a scale question
+                if strict_response.response_format == "scale":
+                    act_1_metadata["scale_range"] = strict_response.scale_range
+                    act_1_metadata["scale_labels"] = strict_response.scale_labels or {}
+                    act_1_metadata["scale_mapping"] = strict_response.scale_mapping or {}
+
+                # Add image URLs if present
+                if strict_response.image_urls:
+                    act_1_metadata["image_urls"] = strict_response.image_urls
+
+                # Pad option_mapping to always have 4 items (AgentResponse requirement)
+                option_mapping = list(strict_response.option_mapping or [])
+                while len(option_mapping) < 4:
+                    option_mapping.append("")  # Pad with empty strings
+
+                # Pad options to match if needed
+                options = list(strict_response.options or [])
+                while len(options) < 4:
+                    options.append("")  # Pad with empty strings
+
                 response = AgentResponse(
                     affirmation=strict_response.affirmation,
                     question_text=strict_response.question_text,
-                    options=strict_response.options,
-                    option_mapping=strict_response.option_mapping,
-                    metadata={},
+                    options=options,
+                    option_mapping=option_mapping,
+                    metadata=act_1_metadata,
                     state={}
                 )
             # Use strict schema for emotional_tone agent
@@ -2201,8 +2334,17 @@ class BaseAgent(ABC):
         response = self.generate_response(user_text, state)
         print(f"\n\n====== {self.name} AgentResponse ======\n", response, "\n===========================\n\n")
 
+        # Track conversation history (last 4 turns)
+        conversation_history = list(state.get("conversation_history", []))
+        conversation_turn = {
+            "affirmation": response.affirmation or "",
+            "question": response.question_text or "",
+            "answer": ""  # Will be filled when user responds
+        }
+
         # Build user-facing text: affirmation + question + enumerated options
         display_text = ""
+
         # Handle affirmation - skip act_1's first affirmation only
         # Handle affirmation - skip act_1's first affirmation only
         if response.affirmation:
@@ -2307,11 +2449,36 @@ class BaseAgent(ABC):
             else:
                 new_state["last_level"] = "L4"  # Fallback
 
-            # Store option_mapping and options for next turn's classification
-            if response.option_mapping:
-                new_state["option_mapping"] = response.option_mapping
-            if response.options:
-                new_state["options"] = response.options
+            # Get response format from metadata
+            response_format = resp_meta.get("response_format", "multiple_choice")
+
+            # Store response format for this turn
+            if current_turn == 1:
+                new_state["response_format_1"] = response_format
+            elif current_turn == 2:
+                new_state["response_format_2"] = response_format
+            elif current_turn == 3:
+                new_state["response_format_3"] = response_format
+            elif current_turn == 4:
+                new_state["response_format_4"] = response_format
+
+            # Handle different response formats
+            if response_format == "scale":
+                # For scale: store scale_range, scale_labels, and scale_mapping
+                new_state["scale_range"] = resp_meta.get("scale_range", "")
+                new_state["scale_labels"] = resp_meta.get("scale_labels", {})
+                new_state["scale_mapping"] = resp_meta.get("scale_mapping", {})
+                # Don't store options/option_mapping for scales
+            else:
+                # For multiple_choice, either_or, and image_choice: store options and mapping
+                if response.option_mapping:
+                    new_state["option_mapping"] = response.option_mapping
+                if response.options:
+                    new_state["options"] = response.options
+
+            # Store image URLs if present (for image_choice format)
+            if resp_meta.get("image_urls"):
+                new_state["image_urls"] = resp_meta.get("image_urls", [])
 
             # Keep metadata fields (these will be updated by update_act_1_metadata_after_answer)
             new_meta.setdefault("confirm_act_1", "unclear")
@@ -2681,12 +2848,17 @@ class BaseAgent(ABC):
         if user_text:
             merged_collected.setdefault(self.info_type, []).append(user_text)
 
+        # Add current turn to conversation history and keep only last 4
+        conversation_history.append(conversation_turn)
+        conversation_history = conversation_history[-4:]  # Keep only last 4 turns
+
         return AgentState(
             messages=[AIMessage(content=display_text)],
             collected_info=merged_collected,
             stage_meta=stage_meta_prev,
             exchanges_with_current=state.get("exchanges_with_current", 0) + 1,
             last_agent=self.name,
+            conversation_history=conversation_history,
         )
 
     def compute_act2_fields(self, act_2_emo_1: str, act_2_emo_2: str,
@@ -3003,7 +3175,16 @@ class Supervisor:
         # Extract hook status
         hook_block = stage_meta.get("hook", {}) or {}
         hook_meta = hook_block.get("metadata", {}) or {}
+
         hook_status = hook_meta.get("hook_status", "unclear")
+
+
+        # Buttons/Input for current options (only if conversation is ongoing)
+        options = st.session_state.state.get("last_options", []) or []
+        # Extract demographics status
+        demo_block = stage_meta.get("demographics", {}) or {}
+        demo_meta = demo_block.get("metadata", {}) or {}
+        demo_status = demo_meta.get("demo_status", "not_started")
 
         # Extract intent info
         act_1_block = stage_meta.get("act_1", {}) or {}
@@ -3066,6 +3247,10 @@ class Supervisor:
             # Extracted variables for easy access by supervisor LLM
             "last_agent": state.get("last_agent", "") or "",
             "hook_status": hook_status,
+            # Demographics variables
+            "user_age": state.get("user_age", "") or "",
+            "user_gender": state.get("user_gender", "") or "",
+            "demo_status": demo_status,
             # Intent variables
             "act_1_status": act_1_status,
             "act_1_turn": str(act_1_turn),
@@ -3150,22 +3335,149 @@ class Supervisor:
         if next_agent in ("finish", "end"):
             return {"next_agent": "FINISH", "exchanges_with_current": 0}
 
-        # If LLM suggested an unknown agent, fallback to deterministic routing
-        if next_agent not in self.agent_keys:
+        # If LLM suggested an unknown agent (except demographics), fallback to deterministic routing
+        if next_agent not in self.agent_keys and next_agent != "demographics":
             print(f"DEBUG SUPERVISOR LLM - unknown agent '{next_agent}', falling back to route()")
             return self.route(state)
-
         # Valid agent → return routing info
-        return {
-            "next_agent": next_agent,
-            "agent_index": self.agent_keys.index(next_agent),
-            "exchanges_with_current": 0,
-        }
+        # For demographics node, don't set agent_index (it's not in agent_keys)
+        if next_agent == "demographics":
+            return {
+                "next_agent": next_agent,
+                "exchanges_with_current": 0,
+            }
+        else:
+            return {
+                "next_agent": next_agent,
+                "agent_index": self.agent_keys.index(next_agent),
+                "exchanges_with_current": 0,
+            }
+
 
 # ============================================================================
 # GRAPH CREATION
 # ============================================================================
+def demographics_node(state: AgentState) -> AgentState:
+    """
+    Hardcoded demographics collection node.
+    Asks for age, then gender, then marks complete.
+    """
+    stage_meta = state.get("stage_meta", {}) or {}
 
+    # Initialize demographics metadata if not exists
+    if "demographics" not in stage_meta:
+        stage_meta["demographics"] = {
+            "metadata": {"demo_status": "not_started", "collected_age": "", "collected_gender": ""},
+            "state": {}
+        }
+
+    demo_meta = stage_meta["demographics"]["metadata"]
+    collected_age = demo_meta.get("collected_age", "")
+    collected_gender = demo_meta.get("collected_gender", "")
+
+    user_input = state.get("user_input", "")
+
+    print(f"DEBUG demographics_node - START:")
+    print(f"  user_input: '{user_input}'")
+    print(f"  collected_age: '{collected_age}'")
+    print(f"  collected_gender: '{collected_gender}'")
+
+    # Determine what to do based on what's been collected
+    if not collected_age:
+        # Need to collect age
+        if user_input and user_input in ["18-24", "25-34", "35-44", "45-54", "55+"]:
+            # User just answered age question - store it and ask gender
+            demo_meta["collected_age"] = user_input
+            demo_meta["demo_status"] = "asking_gender"
+
+            print(f"DEBUG - Stored age: {user_input}, now asking gender")
+
+            # Ask gender question
+            question_text = "What is your gender?"
+            options = ["Male", "Female", "Other"]
+            display_text = f"<div style='text-align: center; font-size: 36px;'>{question_text}</div>\n\n"
+            display_text += "A) Male\n"
+            display_text += "B) Female\n"
+            display_text += "C) Other"
+
+            return {
+                **state,
+                "messages": [AIMessage(content=display_text)],
+                "stage_meta": stage_meta,
+                "last_agent": "demographics",
+                "last_options": options,
+            }
+        else:
+            # Ask age question
+            question_text = "What is your age?"
+            options = ["18-24", "25-34", "35-44", "45-54", "55+"]
+
+            print(f"DEBUG - Asking for age")
+
+            display_text = f"<div style='text-align: center; font-size: 36px;'>{question_text}</div>\n\n"
+            display_text += "A) 18-24\n"
+            display_text += "B) 25-34\n"
+            display_text += "C) 35-44\n"
+            display_text += "D) 45-54\n"
+            display_text += "E) 55+"
+
+            return {
+                **state,
+                "messages": [AIMessage(content=display_text)],
+                "stage_meta": stage_meta,
+                "last_agent": "demographics",
+                "last_options": options,
+            }
+
+    elif not collected_gender:
+        # Need to collect gender
+        if user_input and user_input in ["Male", "Female", "Other"]:
+            # User just answered gender question - mark complete
+            demo_meta["collected_gender"] = user_input
+            demo_meta["demo_status"] = "complete"
+
+            print(f"DEBUG - Stored gender: {user_input}, demographics complete")
+
+            return {
+                **state,
+                "stage_meta": stage_meta,
+                "last_agent": "demographics",
+                "last_options": [],
+                "user_age": collected_age,
+                "user_gender": user_input,
+            }
+        else:
+            # Ask gender question
+            question_text = "What is your gender?"
+            options = ["Male", "Female", "Other"]
+
+            print(f"DEBUG - Asking for gender")
+
+            display_text = f"<div style='text-align: center; font-size: 36px;'>{question_text}</div>\n\n"
+            display_text += "A) Male\n"
+            display_text += "B) Female\n"
+            display_text += "C) Other"
+
+            return {
+                **state,
+                "messages": [AIMessage(content=display_text)],
+                "stage_meta": stage_meta,
+                "last_agent": "demographics",
+                "last_options": options,
+            }
+
+    else:
+        # Both collected, mark complete
+        print(f"DEBUG - Demographics already complete (age={collected_age}, gender={collected_gender})")
+
+        return {
+            **state,
+            "stage_meta": stage_meta,
+            "last_agent": "demographics",
+            "last_options": [],
+            "user_age": collected_age,
+            "user_gender": collected_gender,
+        }
 def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
     """Create the LangGraph workflow with agent instances."""
     agents: Dict[str, BaseAgent] = {}
@@ -3185,7 +3497,8 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
 
     for k, a in agents.items():
         workflow.add_node(k, a.process)
-
+        # Add demographics node (hardcoded, not an agent)
+    workflow.add_node("demographics", demographics_node)
     main_keys = list(agents.keys())
 
     def route_after_agent(state: AgentState) -> str:
@@ -3207,7 +3520,10 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
         """
         # What the LLM supervisor suggested
         nxt = (state.get("next_agent") or "").lower()
-
+        # Handle demographics routing
+        if nxt == "demographics":
+            print("DEBUG ROUTER - Routing to demographics node")
+            return "demographics"
         # Read tone status from stage_meta (if present)
         stage_meta = state.get("stage_meta", {}) or {}
         act_2_block = stage_meta.get("connection_tone", {}) or {}
@@ -3234,6 +3550,7 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
 
     # Map supervisor → next_agent (or END)
     edges_map = {k: k for k in main_keys}
+    edges_map.update({"demographics": "demographics"})  # ADD THIS LINE
     edges_map.update({"END": END})
     workflow.add_conditional_edges("supervisor", route_from_supervisor, edges_map)
 
@@ -3247,6 +3564,9 @@ def create_graph(agent_configs: Dict[str, Dict[str, Any]]):
             # All agents (including connection_intent) end after running
             # This allows UI to wait for user input before next graph.invoke()
             workflow.add_edge(k, END)
+
+    # Demographics also ends after running (waits for user input)  # ADD THIS LINE
+    workflow.add_edge("demographics", END)  # ADD THIS LINE
 
     workflow.set_entry_point("supervisor")
     return workflow.compile()
@@ -3278,6 +3598,14 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
     print(f"DEBUG - Input state stage_meta: {state.get('stage_meta', {})}")
 
     before = len(state.get("messages", []))
+    # Update conversation history with user's answer to previous question
+    if msg:
+        conversation_history = list(state.get("conversation_history", []))
+        if conversation_history and isinstance(conversation_history[-1], dict) and not conversation_history[-1].get(
+                "answer"):
+            conversation_history[-1]["answer"] = msg
+            state = {**state, "conversation_history": conversation_history}
+
     state = {
         **state,
         "messages": list(state.get("messages", [])) + [HumanMessage(content=msg)],
@@ -3286,6 +3614,7 @@ def process_user_message(graph, state: AgentState, msg: str) -> Tuple[str, Agent
 
     #  Ensure tone block and emo fields exist BEFORE graph.invoke
     state = ensure_act_2_block(state)
+
     # Update intent metadata if user answered an intent question
     last_agent = state.get("last_agent", "")
     print(f"🔍 DEBUG - Full state keys: {list(state.keys())}")  # ADD THIS
@@ -3343,7 +3672,6 @@ def _init_session():
 
     if "state" not in st.session_state:
         collected_info_init = {cfg["info_type"] for cfg in AGENT_CONFIGS.values()}
-
         base_state = AgentState(
             messages=[],
             user_input="",
@@ -3361,6 +3689,9 @@ def _init_session():
             last_options=[],
             ad_data=st.session_state.ad_data,
             user_profile={},
+            conversation_history=[],
+            user_age="",
+            user_gender="",
         )
 
         # ✅ make sure connection_tone + emo_act_2_type + confirm_act_2 exist from the start
@@ -3402,7 +3733,6 @@ def main():
         ai_text, new_state = process_user_message(st.session_state.graph, first_state, "")
         st.session_state.state = new_state
         st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
-
     with st.sidebar:
         # Display ad data
         st.header("📢 Ad Context")
@@ -3411,7 +3741,26 @@ def main():
         st.markdown(f"**Description:** {ad_data.get('ad_description', 'N/A')}")
         st.markdown(f"**Theme:** {ad_data.get('ad_theme', 'N/A')}")
         st.markdown("---")
+        # Display user demographics
+        st.header("👤 User Profile")
 
+        # Get demographics from metadata (more reliable)
+        stage_meta = st.session_state.state.get("stage_meta", {}) or {}
+        demo_block = stage_meta.get("demographics", {}) or {}
+        demo_meta = demo_block.get("metadata", {}) or {}
+
+        collected_age = demo_meta.get("collected_age", "Not set")
+        collected_gender = demo_meta.get("collected_gender", "Not set")
+
+        # Fallback to state values if not in metadata
+        if collected_age == "Not set":
+            collected_age = st.session_state.state.get("user_age", "Not set")
+        if collected_gender == "Not set":
+            collected_gender = st.session_state.state.get("user_gender", "Not set")
+
+        st.markdown(f"**Age Range:** {collected_age}")
+        st.markdown(f"**Gender:** {collected_gender}")
+        st.markdown("---")
         st.markdown("---")
         st.header("Conversation Insights")
         meta = st.session_state.state.get("stage_meta", {}) or {}
@@ -3693,7 +4042,9 @@ def main():
                 stage_meta={},
                 last_options=[],
                 ad_data=st.session_state.ad_data,
-                user_profile={},
+                user_profile={"age": "", "gender": ""},
+                user_age="",
+                user_gender="",
             )
             st.session_state.chat_history = []
             st.rerun()
@@ -3793,27 +4144,19 @@ def main():
         hook_meta = hook_block.get("metadata", {}) or {}
         hook_status = hook_meta.get("hook_status", "unclear")
 
-        # If hook just displayed, show Continue button
-        if hook_status == "clear" and st.session_state.chat_history and st.session_state.chat_history[-1][
-            "role"] == "assistant":
-            last_msg_content = st.session_state.chat_history[-1]["content"]
-            hook_text = hook_meta.get("hook_text", "")
-
-            # Check if this is the hook message
-            if hook_text and hook_text in last_msg_content:
-                # Show Continue button
+        # After hook completes, show Continue button to trigger demographics
+        if hook_status == "clear":
+            last_agent = st.session_state.state.get("last_agent", "")
+            if last_agent == "hook":
+                # Hook just completed, show Continue button
                 if st.button("Continue", key="hook_continue", type="primary"):
-                    # Clear hook message and trigger next agent
-                    ai_text, new_state = process_user_message(
-                        st.session_state.graph, st.session_state.state, ""
-                    )
+                    # Trigger graph to move to demographics
+                    ai_text, new_state = process_user_message(st.session_state.graph, st.session_state.state, "")
                     st.session_state.state = new_state
-                    # Clear chat history and add only new question
                     st.session_state.chat_history = []
                     if ai_text:
                         st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
                     st.rerun()
-                # Don't show options or input when hook is displayed
                 return
 
 
@@ -3828,7 +4171,31 @@ def main():
                 last_agent = st.session_state.state.get("last_agent", "")
 
                 # Only check for flexible formats if emotional_tone agent is active
-                if last_agent == "act_2":
+                # Check for flexible formats if act_1 agent is active
+                if last_agent == "act_1":
+                    # Check act_1 agent state for response format
+                    act_1_block = stage_meta.get("act_1", {}) or {}
+                    act_1_state = act_1_block.get("state", {}) or {}
+                    act_1_turn = act_1_state.get("turn", 0)
+
+                    # Get the response format for the current question
+                    if act_1_turn == 1:
+                        response_format = act_1_state.get("response_format_1", "multiple_choice")
+                    elif act_1_turn == 2:
+                        response_format = act_1_state.get("response_format_2", "multiple_choice")
+                    elif act_1_turn == 3:
+                        response_format = act_1_state.get("response_format_3", "multiple_choice")
+                    elif act_1_turn == 4:
+                        response_format = act_1_state.get("response_format_4", "multiple_choice")
+                    else:
+                        response_format = "multiple_choice"
+
+                    # Get scale info if needed
+                    scale_range = act_1_state.get("scale_range", "")
+                    scale_labels = act_1_state.get("scale_labels", {})
+
+                # Check for flexible formats if emotional_tone agent is active
+                elif last_agent == "act_2":
                     # Check emotional_tone agent state for response format
                     act_2_block = stage_meta.get("act_2", {}) or {}
                     act_2_state = act_2_block.get("state", {}) or {}
@@ -3907,13 +4274,12 @@ def main():
 
                 # PROCESS USER RESPONSE
                 if user_response:
-                    st.session_state.chat_history.append({"role": "user", "content": user_response})
+
+
                     ai_text, new_state = process_user_message(
                         st.session_state.graph, st.session_state.state, user_response
                     )
-                    # Clear chat history - only show current question
-                    st.session_state.chat_history = []
-
+                    st.session_state.state = new_state  # CRITICAL: Update state immediately
                     # Check if conversation just ended
                     new_stage_meta = new_state.get("stage_meta", {}) or {}
                     new_act_1_meta = new_stage_meta.get("act_1", {}).get("metadata", {})
@@ -3927,6 +4293,9 @@ def main():
                     new_confirm_act_3 = new_act_3_meta.get("confirm_act_3", "unclear")
                     new_confirm_act_4 = new_act_4_meta.get("confirm_act_4", "unclear")
 
+                    # Clear chat history and add only the new question
+                    st.session_state.chat_history = []
+
                     # Check if conversation is complete (all 4 agents done)
                     if (new_confirm_act_1 == "clear" and new_confirm_act_2 == "clear" and
                             new_confirm_act_3 == "clear" and new_confirm_act_4 == "clear"):
@@ -3936,6 +4305,7 @@ def main():
                         st.session_state.chat_history.append({"role": "assistant", "content": ai_text})
 
                     st.rerun()
+
 
         # Free-text input (only if conversation is ongoing)
         prompt = st.chat_input("Type your message...")

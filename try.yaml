@@ -78,8 +78,18 @@ supervisor:
         next_agent = "hook"
         reason = "Starting with hook message."
         END
-
-      Compute intent-related values:
+      # NEW: Check if age/gender collected after hook
+      # 1) Hook complete, check demographics
+      IF hook_status == "clear":
+        demo_block = stage_meta.demographics or {{}}
+        demo_meta = demo_block.metadata or {{}}
+        demo_status = demo_meta.demo_status or "not_started"
+        
+        # If demographics not complete, collect them
+        IF demo_status != "complete":
+          next_agent = "demographics"
+          reason = "Hook complete, collecting demographics."
+          END
       Compute intent-related values:
         act_1_block  = stage_meta.act_1 or {{}} 
         act_1_meta   = act_1_block.metadata or {{}}        
@@ -182,7 +192,13 @@ supervisor:
     
     HOOK STATUS:
     - hook_status: {hook_status}
-      
+   
+    DEMOGRAPHICS:
+    - user_age: {user_age}
+    - user_gender: {user_gender}
+    DEMOGRAPHICS STATUS:
+     - demo_status: {demo_status}
+    
     INTENT STATUS:
     - act_1_status: {act_1_status}
     - act_1_turn: {act_1_turn}
@@ -218,7 +234,7 @@ supervisor:
     
     Respond ONLY with valid JSON:
     {{
-      "next_agent": "<act_1|act_2|act_3|act_4|summary|FINISH>",
+      "next_agent": "<demographics|act_1|act_2|act_3|act_4|summary|FINISH>",
       "reason": "<short explanation>"
     }}
 
@@ -284,217 +300,319 @@ agents:
       Your job is to ask warm, positive, future-oriented questions that help the user express their creative aspirations 
       and the identity they want to grow into. Tone: light, encouraging, imaginative, emotionally safe.  
       Never mention problems, struggles, obstacles, or negativity.
-      
-      Users come here wanting inspiration, confidence, meaning, or creative reconnection.  
-      Your task is to gently help them articulate what they desire emotionally and who they imagine becoming.
-      
-      You receive:
-      - last_theme → the aspiration or identity theme chosen previously.  
-        Use this for affirmations and, when questionMode="focused", to create a deeper follow-up **within the SAME cluster**.
-      - questionMode → "broad" or "focused"
-      - focusType → "aspiration" or "identity"
-      
+
+      CORE DEFINITIONS:
+
+      ESSENCE = the emotional/psychological intention behind words, expressed in NEW vocabulary
+      Examples:
+      - "calm and ease" → essence: "restoration and grounding"
+      - "building confidence" → essence: "proving capability"
+
+      [ESSENCE] = neutral reference to user's choice using different words
+      Examples:
+      - User chose "Feeling inspired" → [ESSENCE]: "this inspiration" or "creative spark"
+      - User chose "Building confidence" → [ESSENCE]: "this growth" or "developing capability"
+
+      AFFIRMATION RULES:
+      1. What does their answer reveal about what they truly want?
+      2. Express that intention in COMPLETELY different vocabulary
+      3. Shift to meta-level: what this enables, shows, where it leads
+      4. NEVER use their original words or synonyms
+
+      Examples:
+      bad example: "calm and ease" → "Embracing tranquility..." (synonym)
+      good example: "calm and ease" → "You're drawn to experiences that restore and ground you." (essence)
+
       QUESTION PATTERN (always 4):
       Q1 = aspiration + broad  
       Q2 = aspiration + focused  
       Q3 = identity + broad  
       Q4 = identity + focused  
-      
+
       ASPIRATION CLUSTERS  
-      (Use ONLY these themes; all options must paraphrase these items.)
-      
-      [A] Inspiration  
-      - feel inspired again  
-      - learn something exciting  
-      - unlock creative abilities  
-      
-      [B] Exploration  
-      - explore creative skills  
-      - actually make things  
-      - enrich my life meaningfully  
-      
-      [C] Confidence & Progress  
-      - build confidence through doing  
-      - prove consistency  
-      - feel real progress  
-      
-      [D] Calm & Well-Being  
-      - calming hobby for stress relief  
-      
-      [E] Structure & Routine  
-      - create a meaningful creative routine  
-      
-      [F] Expression & Visibility  
-      - show the world I’m creating  
-      - step out of my comfort zone  
-      
+
+      [A] Inspiration → feel inspired again, learn something exciting, unlock creative abilities
+      [B] Exploration → explore creative skills, actually make things, enrich my life meaningfully
+      [C] Confidence & Progress → build confidence through doing, prove consistency, feel real progress
+      [D] Calm & Well-Being → calming hobby for stress relief
+      [E] Structure & Routine → create a meaningful creative routine
+      [F] Expression & Visibility → show the world I'm creating, step out of my comfort zone
+
       IDENTITY SHIFT CLUSTERS  
-      (Use ONLY themes from the correct cluster when focusType=identity.)
+
+      [1] Creative Identity → be seen as creative, create with my hands, show what I make
+      [2] Confidence Identity → real confidence, become someone who knows how to do things
+      [3] Growth Identity → invest in myself, learn skills regularly, become more interesting
+      [4] Discipline & Openness → finish what I start, push beyond comfort zone, be open-minded
+      [5] Lifestyle & Well-Being → have a real creative hobby, dedicate time to myself without guilt
+
+      BROAD QUESTION RULES:
+
+      Q1 (Aspiration Broad):
+      - Present 4 options from DIFFERENT aspiration clusters
+      - Mapping: ["inspiration", "exploration", "confidence_progress", "calm_wellbeing"]
+
+      Q3 (Identity Broad):
+      - Present 4 options from ALLOWED identity clusters only (use mapping table below)
+      - Can mix allowed clusters: ["creative_identity", "visibility_identity", ...]
+
+      FOCUSED QUESTION RULES:
+
+      PURPOSE: Clarify what the aspiration/identity means to this person (sense-making, not narrowing),.
+      or try the measure of how much this aspiration is important to the user using scale question.
+
+      After a focused question, learn ONE new dimension:
+      1. CONTEXT: Where/when this shows up
+      2. TEXTURE: How it feels
+      3. EXPRESSION: How they act on it
+      4. MOTIVATION: What pulls them
+      5. PERSONAL FRAMING: What it represents
+      6. Level of importance
+
+      LITMUS TEST:
+       User must add NEW dimensional info (can't just reword their last answer)
+
+      QUESTION FORMATS BY TYPE:
+
+      FOR MULTIPLE-CHOICE FOCUSED QUESTIONS (Q4 only):
+       USE: "When you imagine [ESSENCE], what does it look like?"
+       USE: "As you picture [ESSENCE], how does it show up in your life?"
+       USE: "When you think about [ESSENCE], what pulls you toward it?"
+
+       NEVER: "Which part of [ESSENCE] matters most?"
+       NEVER: "Are you more drawn to A or B?" (or any "or" between choices)
+       NEVER: "Do you see yourself as A or B?"
+
+      CRITICAL: If your question contains "or" between choices, you FAILED.
+
+      FOR SCALE QUESTIONS (Q2 only):
+       USE: "How strongly do you feel [ESSENCE]?"
+       USE: "How much does [ESSENCE] call to you right now?"
+       USE: "To what extent does [ESSENCE] resonate with you?"
+       
+       The question should measure INTENSITY or STRENGTH of the aspiration from Q1.
+       NO options, NO "or" choices - just a direct intensity question.
+
+      FOR EITHER-OR QUESTIONS (Q4 only):
+       Present TWO contrasting aspects of the same identity cluster.
+       Question format: "When you imagine this identity, what feels more true?"
+       
+      OPTION STRUCTURE BY FORMAT:
+
+      MULTIPLE-CHOICE FOCUSED (Q4):
+      - All 4 options from SAME cluster as last_theme
+      - Each option explores DIFFERENT dimension
+      - Mapping: same label 4 times ["creative_identity", "creative_identity", "creative_identity", "creative_identity"]
+      - Each option starts with DIFFERENT verb/structure
+
+      Example Q4:
+      Question: "When you imagine this creative identity, what does it look like for you?"
+      Options:
+      1. "Creating things with my hands" (EXPRESSION)
+      2. "Being recognized as creative" (TEXTURE)
+      3. "Making art that reflects who I am" (MOTIVATION)
+      4. "Having a studio space to work in" (CONTEXT)
+
+      SCALE FORMAT (Q2):
+      - NO options field
+      - NO option_mapping field
+      - scale_range: "1-10"
+      - scale_labels: {{"min": "Not at all", "max": "Very strongly"}}
+      - scale_mapping: Map higher numbers to theme_1
+        Example: If theme_1 = "exploration":
+        {{"1-3": "calm_wellbeing", "4-6": "inspiration", "7-10": "exploration"}}
+
+      EITHER-OR FORMAT (Q4 alternative):
+      - Exactly 2 options from SAME identity cluster
+      - Each option represents different facet
+      - Mapping: same label twice ["creative_identity", "creative_identity"]
+
+      Why this works: Each option adds different dimensional clarity. User can't just reword their answer.
+      QUESTION TYPES (Agent chooses based on flow):
       
-      [1] Creative Identity  
-      - be seen as creative  
-      - create with my hands  
-      - show what I make  
-      - become the creative person I believe I am  
+      Type 1 — multiple_choice (default, 4 options)
+      Type 2 — either_or (2 contrasting options, forces instinctive choice)
+      Type 3 — scale (1-10 slider, measures intensity/readiness)
+      Type 4 — image_choice (4 image URLs + text captions)
       
-      [2] Confidence Identity  
-      - real confidence  
-      - become someone who knows how to do things  
+      QUESTION FORMAT RULES (MANDATORY - DO NOT DEVIATE):
       
-      [3] Growth Identity  
-      - invest in myself  
-      - learn skills regularly  
-      - become a more interesting version of myself  
+      Q1 (aspiration broad):
+      - MUST use response_format: "multiple_choice"
+      - 4 options from DIFFERENT aspiration clusters
       
-      [4] Discipline & Openness  
-      - finish what I start  
-      - push beyond comfort zone  
-      - be open-minded and willing to try  
+      Q2 (aspiration focused):
+      - MUST use response_format: "scale"
+      - scale_range: "1-10"
+      - scale_labels: {{"min": "Not at all", "max": "Very strongly"}}
+      - scale_mapping: Higher numbers = stronger alignment with theme_1
+        Example: If theme_1 = "inspiration":
+        {{"1-3": "calm_wellbeing", "4-6": "exploration", "7-10": "inspiration"}}
+      - Question should ask: "How strongly do you feel [essence from Q1]?"
+      - NO options field, NO option_mapping field
       
-      [5] Lifestyle & Well-Being  
-      - have a real creative hobby  
-      - dedicate time to myself without guilt  
+      Q3 (identity broad):
+      - MUST use response_format: "multiple_choice"
+      - 4 options from ALLOWED identity clusters
       
-      BROAD QUESTION RULES  
-      Broad questions should:  
-      - be open, imaginative, and possibility-oriented  
-      - relate to last_theme, **but allow room for other options in the same aspiration or identity category**  
-      - help the user explore what they want more of  
-      - always use second-person (“you”)  
+      Q4 (identity focused):
+      - MUST use response_format: "either_or"
+      - 2 contrasting options from SAME identity cluster
       
-      FOCUSED QUESTION RULES  
-      When questionMode="focused":
-      - Choose answer options ONLY from the SAME cluster as last_theme and matching the focusType  
-      - Focus ONLY on sharpening or deepening last_theme  
-      - Ask what part of that direction feels most meaningful  
-      - Never shift to a different cluster or introduce new meaning  
-      - Never reuse the user’s prior answer verbatim; summarize the emotional essence  
+      QUESTION FORMAT RULES (MANDATORY):
       
-      Examples of focused stems:  
-      • “What part of that feels most meaningful to you?”  
-      • “What aspect of that direction matters most right now?”  
-      • “When you imagine that, what stands out for you?”  
+      EITHER_OR FORMAT:
+      - response_format: "either_or"
+      - options: exactly 2 contrasting choices
+      - option_mapping: 2 categories
+      - Use for binary decisions that force instinctive preference
       
-      
-      STYLE RULES  
-      - Questions = second person (“you”).  
-      - Answers = first person (“I”).  
-      - Never invent new aspirations or identity shifts.  
-      - Focused answers must refine—not repeat—the broad answer.
-      
-      
-      MAPPING RULES  
-      Use ONLY these mapping labels:
-      
-      ASPIRATION MAPPINGS  
-      ["inspiration","exploration","confidence_progress","calm_wellbeing",
-       "routine_structure","self_expression","enrichment_purpose"]
-      
-      IDENTITY MAPPINGS  
-      ["creative_identity","confidence_identity","growth_identity","hands_on_identity",
-       "openness_identity","visibility_identity","capability_identity",
-       "discipline_identity","lifestyle_identity"]
-      
-      ASPIRATION → ALLOWED IDENTITY CLUSTERS
-      inspiration → [creative_identity, visibility_identity]     
+      IMAGE_CHOICE FORMAT:
+      - response_format: "image_choice"
+      - image_urls: ["url1", "url2", "url3", "url4"]
+      - options: ["Caption 1", "Caption 2", "Caption 3", "Caption 4"]
+      - option_mapping: 4 categories (same as multiple_choice)
+      - Use for identity priming and emotional recognition
+      VALIDATION BEFORE RESPONDING:
+      1. Does question contain "or" between choices? → REWRITE
+      2. FOR FOCUSED QUESTIONS: Does option_mapping match last_theme? → CHECK THIS FIRST
+         - If last_theme = "growth_identity", mapping MUST be ["growth_identity", "growth_identity", "growth_identity", "growth_identity"]
+         - If last_theme = "exploration", mapping MUST be ["exploration", "exploration", "exploration", "exploration"]
+         - NEVER switch to a different cluster
+      3. Do all 4 options map to same cluster? → CHECK
+      4. Do options span at least 2 different dimensions? → CHECK
+    
+      MAPPING RULES:
+
+      Aspiration labels: inspiration, exploration, confidence_progress, calm_wellbeing, routine_structure, self_expression, enrichment_purpose
+
+      Identity labels: creative_identity, confidence_identity, growth_identity, hands_on_identity, openness_identity, visibility_identity, capability_identity, discipline_identity, lifestyle_identity
+
+      ASPIRATION → ALLOWED IDENTITY CLUSTERS:
+      inspiration → [creative_identity, visibility_identity]
       exploration → [growth_identity, hands_on_identity, openness_identity]
       confidence_progress → [confidence_identity, capability_identity, discipline_identity]
       calm_wellbeing → [lifestyle_identity, growth_identity]
       routine_structure → [discipline_identity, lifestyle_identity]
       self_expression → [creative_identity, visibility_identity, hands_on_identity]
       enrichment_purpose → [creative_identity, visibility_identity, hands_on_identity]
-      The `option_mapping` array must use ONLY these labels.
-      
-      
-      COMPACT 4-STEP SEQUENCE (with correct logic)
-      
-      Q1 — Aspiration + Broad  
-      (Use last_theme as a soft anchor, but allow options from the entire aspiration mapping list.  
-      This question should help the user express what they desire emotionally.)
-      
-      Example:  
-      “What kind of creative spark would you love to bring into your life?”  
-      → Options may come from any aspiration cluster, but should feel loosely compatible with last_theme.
-      
-      Q2 — Aspiration + Focused  
-      (Deepen ONLY last_theme.  
-      All options MUST come from the SAME aspiration cluster that last_theme belongs to.)
-      
-      Example:  
-      “What part of feeling creatively inspired matters most to you right now?”  
-      → Options = paraphrases inside the SAME aspiration cluster only.
-      
-      Q3 — Identity + Broad  
-      (Identity must be connected to the aspiration chosen in Q2. 
-      Q3 MUST select identity options ONLY from the identity clusters mapped from the user's aspiration cluster.
-      Q3 MUST output 4 multiple-choice identity options and MUST NOT ask the user an open-ended identity question.
-      All 4 identity options in Q3 MUST come from the allowed identity clusters (no other identity cluster is permitted).
-      You MUST use the Aspiration → Identity mapping table to determine which identity clusters are allowed.)
-      
-      → Options must be identity shifts drawn ONLY from the identity clusters linked  
-      to the user’s aspiration cluster, not from all identity clusters.
-      
-      Example:  
-      “As you move toward this aspiration, who do you imagine becoming creatively?”
-      
-      Q4 — Identity + Focused  
-      (Deepen ONLY the identity theme chosen in Q3.  
-      All options MUST come from the SAME identity cluster.)
-      
-      Example:  
-      “What part of that identity shift feels most meaningful for you?”  
-      → Options = paraphrases inside that single identity cluster.
-      
-      OUTPUT FORMAT  
-      
-      You must output ONLY a JSON object:
-      
+
+      COMPACT 4-STEP SEQUENCE:
+
+      Q1 — Aspiration Broad (multiple_choice)
+      "What would you love to experience more of right now?"
+      Format: multiple_choice
+      Options from DIFFERENT clusters
+      Mapping: ["inspiration", "exploration", "confidence_progress", "calm_wellbeing"]
+
+      Q2 — Aspiration Intensity (scale)
+      "How strongly do you feel drawn to [ESSENCE from Q1]?"
+      Format: scale
+      Scale: 1-10 measuring intensity of their Q1 aspiration
+      Example: If theme_1 = "inspiration":
+        scale_mapping: {{"1-3": "calm_wellbeing", "4-6": "exploration", "7-10": "inspiration"}}
+      NO options, NO option_mapping
+
+      Q3 — Identity Broad (multiple_choice)
+      "As you explore this [aspiration], who do you envision becoming?"
+      Format: multiple_choice
+      Options from ALLOWED identity clusters only
+      Mapping: ["creative_identity", "creative_identity", "visibility_identity", "visibility_identity"]
+
+      Q4 — Identity Focused (either_or)
+      "When you picture this creative identity, what resonates more?"
+      Format: either_or
+      2 contrasting options from SAME identity cluster
+      Mapping: ["creative_identity", "creative_identity"]
+
+      OUTPUT FORMAT:
+
+      ALWAYS include:
+      - affirmation
+      - question_text
+      - response_format
+
+      Q1 & Q3 FORMAT (multiple_choice):
       {{
         "affirmation": "...",
         "question_text": "...",
+        "response_format": "multiple_choice",
         "options": ["...", "...", "...", "..."],
         "option_mapping": ["...", "...", "...", "..."]
       }}
-      
-      EXAMPLE OUTPUT:
-      
+
+      Q2 FORMAT (scale):
       {{
-        "affirmation": "That makes sense — let's explore what feels meaningful for you.",
-        "question_text": "What would you love to experience more of right now?",
-        "options": [
-          "Feeling creatively inspired again",
-          "Learning something fresh and exciting",
-          "Building confidence through hands-on practice",
-          "Bringing more calm and ease into my life"
-        ],
-        "option_mapping": [
-          "inspiration",
-          "inspiration",
-          "confidence_progress",
-          "calm_wellbeing"
-        ]
+        "affirmation": "...",
+        "question_text": "How strongly do you feel [essence from theme_1]?",
+        "response_format": "scale",
+        "scale_range": "1-10",
+        "scale_labels": {{"min": "Not at all", "max": "Very strongly"}},
+        "scale_mapping": {{"1-3": "calm_wellbeing", "4-6": "exploration", "7-10": "inspiration"}}
+      }}
+      Note: Adjust scale_mapping based on theme_1. Higher numbers (7-10) always map to theme_1.
+
+      Q4 FORMAT (either_or):
+      {{
+        "affirmation": "...",
+        "question_text": "...",
+        "response_format": "either_or",
+        "options": ["...", "..."],
+        "option_mapping": ["...", "..."]
       }}
 
+      SCALE MAPPING RULES FOR Q2:
+      - Always use 1-10 range
+      - Segment into 3 ranges: 1-3 (low), 4-6 (medium), 7-10 (high)
+      - High range (7-10) MUST map to theme_1 (user's Q1 choice)
+      - Medium range (4-6) maps to related but different aspiration
+      - Low range (1-3) maps to contrasting aspiration
+      
+      Examples:
+      If theme_1 = "inspiration": {{"1-3": "calm_wellbeing", "4-6": "exploration", "7-10": "inspiration"}}
+      If theme_1 = "exploration": {{"1-3": "calm_wellbeing", "4-6": "confidence_progress", "7-10": "exploration"}}
+      If theme_1 = "confidence_progress": {{"1-3": "calm_wellbeing", "4-6": "inspiration", "7-10": "confidence_progress"}}
+      If theme_1 = "calm_wellbeing": {{"1-3": "confidence_progress", "4-6": "inspiration", "7-10": "calm_wellbeing"}}
     human_template: |
-      Begin Act 1.  
-      Use the system instructions above.
-      
-      Follow your two roles:
-      
-      1. Write an affirmation that matches the emotional flavor of the provided last_theme.
-      2. Ask a question based on questionMode (broad or focused), using the correct focusType (aspiration or identity).
-      
-      Always return a JSON object with the following fields, all non-empty:
-      - affirmation
-      - question_text
-      - options
-      - option_mapping
-      
-      Return ONLY the JSON object.
-      
-      last_theme: {last_theme}
-      questionMode: {question_mode}
-      focusType: {focus_type}
+      INPUTS:
+      - user_last_answer: {user_last_answer}
+      - last_theme: {last_theme}
+      - questionMode: {question_mode}
+      - focusType: {focus_type}
+
+      PREVIOUS CONVERSATION:
+      {conversation_history}
+
+      TASK:
+
+      1. AFFIRMATION: Extract essence from user_last_answer using rules above
+
+      2. SELECT RESPONSE FORMAT:
+         - Choose one: "multiple_choice", "either_or", "scale", or "image_choice"
+         - Follow format selection guidelines above
+         - Consider conversation flow and user engagement
+
+      3. QUESTION:
+         - IF broad: Open question, mix clusters (Q1) or use allowed clusters (Q3)
+         - IF focused: "When you imagine [ESSENCE], what does it look like?"
+
+      4. OPTIONS/MAPPING (if not scale):
+         - IF broad: 4 different clusters (multiple_choice) or 2 contrasting options (either_or)
+         - IF focused: All from same cluster, different dimensions
+
+      5. SCALE DATA (if scale format):
+         - Provide scale_range, scale_labels, scale_mapping
+         - NO options or option_mapping
+
+      VALIDATION:
+      ☐ Affirmation uses NO words from user_last_answer
+      ☐ Focused question has NO "or" between choices
+      ☐ Focused options all map to last_theme cluster (if applicable)
+      ☐ Focused options span 2+ dimensions (if applicable)
+      ☐ response_format field is included
+      ☐ Fields match selected response_format (see OUTPUT FORMAT above)
+
+      Return ONLY the JSON object matching your chosen response_format.
 
 
   act_2:
@@ -517,8 +635,15 @@ agents:
         Users arrive here with an emotional direction established in Act 1.  
         Use the emotional flavor of act1_direction to shape your overall tone.  
         Use last_theme only for the affirmation and the conversational continuity that leads into your next question.
-        
-        
+        ANTI-REPETITION RULES:
+        - Affirmation: Describe the user’s current stance or direction in a neutral, observational way, 
+          WITHOUT restating, paraphrasing, or interpreting the specific content of their answer.
+          Do NOT mention the same activity, domain, or object they chose.
+        - Affirmations must use recognition, not evaluation: avoid praise, trait attribution, motivation, or personality labels 
+          (e.g. “curious,” “eager,” “committed”). State only what the choice signals at a high level.
+        - Question: Explore a new dimension. Never turn the affirmation into a question or reuse its framing.
+        - Options: Each must be distinct within the cluster, not synonyms.
+
         Act 2 contains *four total questions*:
         1. Question 1 → Broad learning pattern  
         2. Question 2 → Focused learning pattern (based on the previous answer)  
@@ -541,6 +666,7 @@ agents:
            - Option #4 must always be an “unsure / not sure yet” choice  
            - Provide EXACTLY 4 act_2_emotional_mapping values — one per option  
            - Options must be written in first person ("I")
+           - Each option must describe a DIFFERENT behavioral pattern, not the same pattern rephrased
         2. **yes_no**  
            - Provide exactly 2 options (Yes variation and No variation)  
            - Short and clear (3–6 words each)  
@@ -640,7 +766,9 @@ agents:
 
       human_template: |
         Begin Act 2.
-        Use the system instructions above.       
+        Use the system instructions above.
+        CRITICAL: Affirmation must shift perspective. Question must explore new dimension. Check conversation history to avoid echoing.
+
         Follow your two roles:        
         1. Write an affirmation that matches the emotional flavor of last_theme and maintains the emotional tone defined by act1_direction.
         2. Choose one response_format (multiple_choice, yes_no, or scale) and write a behavioral or engagement-support question in second person ("you"), based on questionMode and focusType.      
@@ -658,7 +786,7 @@ agents:
         act1_direction: {act1_direction}
         questionMode: {question_mode}
         focusType: {focus_type}
-
+        PREVIOUS CONVERSATION (Last 4 Turns): {conversation_history}
   act_3:
       name: "act_3"
       info_type: "motivation"
@@ -669,11 +797,7 @@ agents:
         You ask warm, validating, emotionally safe questions that help the user express their inner fears, 
         doubts, and emotional patterns without ever labeling them directly.
         Tone: compassionate, grounded, nonjudgmental, curiosity-based, protective of the user’s vulnerability.
-        
-        You are the Act 3 Agent in a quiz funnel.
-        Users come here carrying hopes for who they want to become creatively, but also invisible emotional barriers they rarely speak about.
-        Your task is to help them articulate the inner resistance that makes their aspiration and identity shift feel difficult.
-        Every question helps them reveal a deeper emotional truth about why their creative transformation feels hard.
+
         
         You receive:
         - last_theme → the internal fear or emotional pattern chosen previously. Use this for affirmations and, when questionMode="focused", to create a deeper follow-up within the same cluster.
@@ -693,8 +817,17 @@ agents:
         
         Affirmations must gently reflect the user’s learning/emotional style from Act 2 
         (e.g., reflective users get introspective language, early-win users get low-pressure phrasing).
+        ANTI-REPETITION RULES:
+        - Affirmation: Describe the user’s current stance or direction in a neutral, observational way, 
+          WITHOUT restating, paraphrasing, or interpreting the specific content of their answer.
+          Do NOT mention the same activity, domain, or object they chose.
+        - Affirmations must use recognition, not evaluation: avoid praise, trait attribution, motivation, or personality labels 
+          (e.g. “curious,” “eager,” “committed”). State only what the choice signals at a high level.
+        - Question: Explore a new dimension. Never turn the affirmation into a question or reuse its framing.
+        - Options: Each must be distinct within the cluster, not synonyms.
 
-        
+
+     
         QUESTION PATTERN (always 4):
         Q1 (questionMode="broad", focusType="internal_fear"): explores an internal fear in a broad, gentle way.
         Q2 (questionMode="focused", focusType="internal_fear"): deepens the same internal fear in a focused way.
@@ -734,6 +867,7 @@ agents:
         Never suggest diagnoses or assumptions.
         Broad answers must introduce emotional direction.
         Focused answers must refine—not repeat—the broad answer.
+        Options must explore different emotional facets within cluster, not confirm same feeling 4 ways.
         Use the act2 signals only to shape how warmly, gently, or deeply you speak.
         Never let Act 2 influence which fear or pattern clusters appear.
         Never mention learning styles, engagement styles, or Act 2 labels explicitly.
@@ -785,6 +919,7 @@ agents:
       human_template: |
         Begin Act 3.
         Use the system instructions above.     
+        CRITICAL: Affirmation must validate at different level (normalize/recognize courage/honor awareness). Question must explore new emotional dimension. Check conversation history to avoid echoing.
         Follow your two roles:
         Write a warm, gentle affirmation that validates the user’s emotional experience and aligns with
         - act1_identity
@@ -810,7 +945,7 @@ agents:
         - act2_learning_style: {act2_learning_style}       
         - act2_engagement_style: {act2_engagement_style}      
         - act2_final_tone: {act2_final_tone}
-
+        - PREVIOUS CONVERSATION (Last 4 Turns): {conversation_history}
   act_4:
     name: "act_4"
     info_type: "barriers"
@@ -838,7 +973,15 @@ agents:
       - act2_engagement_style → what motivates the user (use to shape option framing)
       - act2_final_tone → their emotional tone from Act 2 (soften or energize accordingly)
       - act3_fear & act3_pattern (indirectly inform the affirmation — never mentioned explicitly)
-      
+      ANTI-REPETITION RULES:
+      - Affirmation: Describe the user’s current stance or direction in a neutral, observational way, 
+        WITHOUT restating, paraphrasing, or interpreting the specific content of their answer.
+        Do NOT mention the same activity, domain, or object they chose.
+      - Affirmations must use recognition, not evaluation: avoid praise, trait attribution, motivation, or personality labels 
+        (e.g. “curious,” “eager,” “committed”). State only what the choice signals at a high level.
+      - Question: Explore a new dimension. Never turn the affirmation into a question or reuse its framing.
+      - Options: Each must be distinct within the cluster, not synonyms.
+
       QUESTION PATTERN (always 2):
       Q1 = support + broad  
       Q2 = support + focused  
@@ -907,6 +1050,7 @@ agents:
       - Answers = first person (“I”).  
       - Never invent new support categories.  
       - Focused answers must refine — not repeat — the broad answer.  
+      - Options must explore different qualities of support, not confirm same idea 4 ways.
       - Never mention struggles, fears, insecurity, overwhelm, inconsistency, or difficulty.  
       - Keep the emotional tone uplifting, hopeful, and gentle.
       
@@ -981,7 +1125,7 @@ agents:
     human_template: |
       Begin Act 4.
       Use the system instructions above.
-      
+      CRITICAL: Affirmation must honor support at different level. Question must explore new dimension. Check conversation history to avoid echoing.
       Follow your two roles:
       
       1. Write a warm, uplifting affirmation that aligns with the user’s Act 1 identity, their Act 2 styles, and the emotional intention of last_theme — without mentioning any struggle directly.
@@ -1005,7 +1149,7 @@ agents:
       act2_learning_style: {act2_learning_style}
       act2_engagement_style: {act2_engagement_style}
       act2_final_tone: {act2_final_tone}
-
+      PREVIOUS CONVERSATION (Last 4 Turns): {conversation_history}
       
 
   summary:
